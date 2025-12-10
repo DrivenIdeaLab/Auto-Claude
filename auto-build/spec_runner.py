@@ -4,24 +4,33 @@ Spec Creation Orchestrator
 ==========================
 
 Dynamic spec creation with complexity-based phase selection.
-The orchestrator self-evaluates task complexity and adapts its process accordingly.
+The orchestrator uses AI to evaluate task complexity and adapts its process accordingly.
+
+Complexity Assessment:
+- By default, uses AI (complexity_assessor.md prompt) to analyze the task
+- AI considers: scope, integrations, infrastructure, knowledge requirements, risk
+- Falls back to heuristic analysis if AI assessment fails
+- Use --no-ai-assessment to skip AI and use heuristics only
 
 Complexity Tiers:
 - SIMPLE (1-2 files): Discovery → Quick Spec → Validate (3 phases)
-- STANDARD (3-10 files): Discovery → Requirements → Context → Spec → Validate (5 phases)
+- STANDARD (3-10 files): Discovery → Requirements → Context → Spec → Plan → Validate (6 phases)
+- STANDARD + Research: Same as above but with research phase for external dependencies (7 phases)
 - COMPLEX (10+ files/integrations): Full 8-phase pipeline with research and self-critique
 
-The process dynamically selects phases based on:
+The AI considers:
 - Number of files/services involved
-- External integrations mentioned
-- Infrastructure changes required
-- Task keywords and scope indicators
+- External integrations and research requirements
+- Infrastructure changes (Docker, databases, etc.)
+- Whether codebase has existing patterns to follow
+- Risk factors and edge cases
 
 Usage:
     python auto-build/spec_runner.py --task "Add user authentication"
     python auto-build/spec_runner.py --interactive
     python auto-build/spec_runner.py --continue 001-feature
     python auto-build/spec_runner.py --task "Fix button color" --complexity simple
+    python auto-build/spec_runner.py --task "Simple fix" --no-ai-assessment
 """
 
 import asyncio
@@ -92,13 +101,30 @@ class ComplexityAssessment:
     estimated_services: int = 1
     external_integrations: list = field(default_factory=list)
     infrastructure_changes: bool = False
+    
+    # AI-recommended phases (if using AI assessment)
+    recommended_phases: list = field(default_factory=list)
+    
+    # Flags from AI assessment
+    needs_research: bool = False
+    needs_self_critique: bool = False
 
     def phases_to_run(self) -> list[str]:
         """Return list of phase names to run based on complexity."""
+        # If AI provided recommended phases, use those
+        if self.recommended_phases:
+            return self.recommended_phases
+        
+        # Otherwise fall back to default phase sets
         if self.complexity == Complexity.SIMPLE:
             return ["discovery", "quick_spec", "validation"]
         elif self.complexity == Complexity.STANDARD:
-            return ["discovery", "requirements", "context", "spec_writing", "planning", "validation"]
+            # Standard can optionally include research if flagged
+            phases = ["discovery", "requirements"]
+            if self.needs_research:
+                phases.append("research")
+            phases.extend(["context", "spec_writing", "planning", "validation"])
+            return phases
         else:  # COMPLEX
             return ["discovery", "requirements", "research", "context", "spec_writing", "self_critique", "planning", "validation"]
 
@@ -317,11 +343,13 @@ class SpecOrchestrator:
         spec_name: Optional[str] = None,
         model: str = "claude-opus-4-5-20251101",
         complexity_override: Optional[str] = None,  # Force a specific complexity
+        use_ai_assessment: bool = True,  # Use AI for complexity assessment (vs heuristics)
     ):
         self.project_dir = Path(project_dir)
         self.task_description = task_description
         self.model = model
         self.complexity_override = complexity_override
+        self.use_ai_assessment = use_ai_assessment
 
         # Complexity assessment (populated during run)
         self.assessment: Optional[ComplexityAssessment] = None
@@ -429,19 +457,30 @@ class SpecOrchestrator:
 
     # === Phase Implementations ===
 
-    async def phase_complexity_assessment(self) -> PhaseResult:
-        """Phase 0: Assess task complexity to determine which phases to run."""
-        print_section("PHASE 0: COMPLEXITY ASSESSMENT", Icons.GEAR)
+    async def phase_complexity_assessment_with_requirements(self) -> PhaseResult:
+        """Phase 3: Assess complexity after requirements are gathered (with full context)."""
+        print_section("PHASE 3: COMPLEXITY ASSESSMENT", Icons.GEAR)
 
-        # Load project index if available
-        project_index = {}
-        auto_build_index = Path(__file__).parent / "project_index.json"
-        if auto_build_index.exists():
-            with open(auto_build_index) as f:
-                project_index = json.load(f)
+        assessment_file = self.spec_dir / "complexity_assessment.json"
+        requirements_file = self.spec_dir / "requirements.json"
 
-        # Perform assessment
-        analyzer = ComplexityAnalyzer(project_index)
+        # Load requirements for full context
+        requirements_context = ""
+        if requirements_file.exists():
+            with open(requirements_file) as f:
+                req = json.load(f)
+                self.task_description = req.get("task_description", self.task_description)
+                requirements_context = f"""
+**Task Description**: {req.get('task_description', 'Not provided')}
+**Workflow Type**: {req.get('workflow_type', 'Not specified')}
+**Services Involved**: {', '.join(req.get('services_involved', []))}
+**User Requirements**:
+{chr(10).join(f'- {r}' for r in req.get('user_requirements', []))}
+**Acceptance Criteria**:
+{chr(10).join(f'- {c}' for c in req.get('acceptance_criteria', []))}
+**Constraints**:
+{chr(10).join(f'- {c}' for c in req.get('constraints', []))}
+"""
 
         if self.complexity_override:
             # Manual override
@@ -452,9 +491,29 @@ class SpecOrchestrator:
                 reasoning=f"Manual override: {self.complexity_override}",
             )
             print_status(f"Complexity override: {complexity.value.upper()}", "success")
+        elif self.use_ai_assessment:
+            # Run AI assessment with full requirements context
+            print_status("Running AI complexity assessment...", "progress")
+            self.assessment = await self._run_ai_complexity_assessment(requirements_context)
+            
+            if self.assessment:
+                print_status(f"AI assessed complexity: {highlight(self.assessment.complexity.value.upper())}", "success")
+                print_key_value("Confidence", f"{self.assessment.confidence:.0%}")
+                print_key_value("Reasoning", self.assessment.reasoning)
+                
+                # Show flags if set
+                if self.assessment.needs_research:
+                    print(f"  {muted('→ Research phase enabled')}")
+                if self.assessment.needs_self_critique:
+                    print(f"  {muted('→ Self-critique phase enabled')}")
+            else:
+                # Fall back to heuristic assessment
+                print_status("AI assessment failed, falling back to heuristics...", "warning")
+                self.assessment = self._heuristic_assessment()
+                print_status(f"Assessed complexity: {highlight(self.assessment.complexity.value.upper())}", "success")
         else:
-            # Automatic assessment
-            self.assessment = analyzer.analyze(self.task_description or "")
+            # Use heuristic assessment
+            self.assessment = self._heuristic_assessment()
             print_status(f"Assessed complexity: {highlight(self.assessment.complexity.value.upper())}", "success")
             print_key_value("Confidence", f"{self.assessment.confidence:.0%}")
             print_key_value("Reasoning", self.assessment.reasoning)
@@ -466,23 +525,100 @@ class SpecOrchestrator:
         for i, phase in enumerate(phases, 1):
             print(f"    {i}. {phase}")
 
-        # Save assessment to spec dir
-        assessment_file = self.spec_dir / "complexity_assessment.json"
-        with open(assessment_file, "w") as f:
-            json.dump({
-                "complexity": self.assessment.complexity.value,
-                "confidence": self.assessment.confidence,
-                "reasoning": self.assessment.reasoning,
-                "signals": self.assessment.signals,
-                "estimated_files": self.assessment.estimated_files,
-                "estimated_services": self.assessment.estimated_services,
-                "external_integrations": self.assessment.external_integrations,
-                "infrastructure_changes": self.assessment.infrastructure_changes,
-                "phases_to_run": phases,
-                "created_at": datetime.now().isoformat(),
-            }, f, indent=2)
+        # Save assessment to spec dir (may already exist from AI agent)
+        if not assessment_file.exists():
+            with open(assessment_file, "w") as f:
+                json.dump({
+                    "complexity": self.assessment.complexity.value,
+                    "confidence": self.assessment.confidence,
+                    "reasoning": self.assessment.reasoning,
+                    "signals": self.assessment.signals,
+                    "estimated_files": self.assessment.estimated_files,
+                    "estimated_services": self.assessment.estimated_services,
+                    "external_integrations": self.assessment.external_integrations,
+                    "infrastructure_changes": self.assessment.infrastructure_changes,
+                    "phases_to_run": phases,
+                    "needs_research": self.assessment.needs_research,
+                    "needs_self_critique": self.assessment.needs_self_critique,
+                    "created_at": datetime.now().isoformat(),
+                }, f, indent=2)
 
         return PhaseResult("complexity_assessment", True, [str(assessment_file)], [], 0)
+
+    async def _run_ai_complexity_assessment(self, additional_requirements_context: str = "") -> Optional[ComplexityAssessment]:
+        """Run AI agent to assess complexity. Returns None if it fails."""
+        assessment_file = self.spec_dir / "complexity_assessment.json"
+        
+        # Prepare context for the AI
+        context = f"""
+**Project Directory**: {self.project_dir}
+**Spec Directory**: {self.spec_dir}
+"""
+        
+        # Add requirements context (this is the key information for accurate assessment)
+        if additional_requirements_context:
+            context += f"\n## Requirements (from user)\n{additional_requirements_context}\n"
+        else:
+            context += f"\n**Task Description**: {self.task_description or 'Not provided'}\n"
+        
+        # Add project index if available
+        auto_build_index = Path(__file__).parent / "project_index.json"
+        if auto_build_index.exists():
+            context += f"\n**Project Index**: Available at {auto_build_index}\n"
+        
+        # Point to requirements file for detailed reading
+        requirements_file = self.spec_dir / "requirements.json"
+        if requirements_file.exists():
+            context += f"\n**Requirements File**: {requirements_file} (read this for full details)\n"
+        
+        try:
+            success, output = await self._run_agent(
+                "complexity_assessor.md",
+                additional_context=context,
+            )
+            
+            if success and assessment_file.exists():
+                with open(assessment_file) as f:
+                    data = json.load(f)
+                
+                # Parse AI assessment into ComplexityAssessment
+                complexity_str = data.get("complexity", "standard").lower()
+                complexity = Complexity(complexity_str)
+                
+                # Extract flags
+                flags = data.get("flags", {})
+                
+                return ComplexityAssessment(
+                    complexity=complexity,
+                    confidence=data.get("confidence", 0.75),
+                    reasoning=data.get("reasoning", "AI assessment"),
+                    signals=data.get("analysis", {}),
+                    estimated_files=data.get("analysis", {}).get("scope", {}).get("estimated_files", 5),
+                    estimated_services=data.get("analysis", {}).get("scope", {}).get("estimated_services", 1),
+                    external_integrations=data.get("analysis", {}).get("integrations", {}).get("external_services", []),
+                    infrastructure_changes=data.get("analysis", {}).get("infrastructure", {}).get("docker_changes", False),
+                    recommended_phases=data.get("recommended_phases", []),
+                    needs_research=flags.get("needs_research", False),
+                    needs_self_critique=flags.get("needs_self_critique", False),
+                )
+            
+            return None
+            
+        except Exception as e:
+            print_status(f"AI assessment failed: {e}", "warning")
+            return None
+
+    def _heuristic_assessment(self) -> ComplexityAssessment:
+        """Fall back to heuristic-based complexity assessment."""
+        # Load project index if available
+        project_index = {}
+        auto_build_index = Path(__file__).parent / "project_index.json"
+        if auto_build_index.exists():
+            with open(auto_build_index) as f:
+                project_index = json.load(f)
+
+        analyzer = ComplexityAnalyzer(project_index)
+        return analyzer.analyze(self.task_description or "")
 
     async def phase_discovery(self) -> PhaseResult:
         """Phase 1: Analyze project structure."""
@@ -721,7 +857,7 @@ Create:
 
     async def phase_research(self) -> PhaseResult:
         """Phase 3: Research external integrations and validate assumptions."""
-        print_section("PHASE 3: INTEGRATION RESEARCH", Icons.SEARCH)
+        print_section("INTEGRATION RESEARCH", Icons.SEARCH)
 
         research_file = self.spec_dir / "research.json"
         requirements_file = self.spec_dir / "requirements.json"
@@ -799,7 +935,7 @@ Output your findings to research.json.
 
     async def phase_context(self) -> PhaseResult:
         """Phase 4: Discover relevant files."""
-        print_section("PHASE 4: CONTEXT DISCOVERY", Icons.FOLDER)
+        print_section("CONTEXT DISCOVERY", Icons.FOLDER)
 
         context_file = self.spec_dir / "context.json"
         requirements_file = self.spec_dir / "requirements.json"
@@ -853,7 +989,7 @@ Output your findings to research.json.
 
     async def phase_spec_writing(self) -> PhaseResult:
         """Phase 5: Write spec.md document."""
-        print_section("PHASE 5: SPEC DOCUMENT CREATION", Icons.FILE)
+        print_section("SPEC DOCUMENT CREATION", Icons.FILE)
 
         spec_file = self.spec_dir / "spec.md"
 
@@ -887,7 +1023,7 @@ Output your findings to research.json.
 
     async def phase_self_critique(self) -> PhaseResult:
         """Phase 6: Self-critique the spec using extended thinking."""
-        print_section("PHASE 6: SPEC SELF-CRITIQUE (ULTRATHINK)", Icons.GEAR)
+        print_section("SPEC SELF-CRITIQUE", Icons.GEAR)
 
         spec_file = self.spec_dir / "spec.md"
         research_file = self.spec_dir / "research.json"
@@ -974,7 +1110,7 @@ Output critique_report.json with:
 
     async def phase_planning(self) -> PhaseResult:
         """Phase 7: Create implementation plan."""
-        print_section("PHASE 7: IMPLEMENTATION PLANNING", Icons.CHUNK)
+        print_section("IMPLEMENTATION PLANNING", Icons.CHUNK)
 
         plan_file = self.spec_dir / "implementation_plan.json"
 
@@ -1041,7 +1177,7 @@ Output critique_report.json with:
 
     async def phase_validation(self) -> PhaseResult:
         """Phase 8: Final validation."""
-        print_section("PHASE 8: FINAL VALIDATION", Icons.SUCCESS)
+        print_section("FINAL VALIDATION", Icons.SUCCESS)
 
         results = self.validator.validate_all()
         all_valid = all(r.valid for r in results)
@@ -1078,18 +1214,34 @@ Output critique_report.json with:
             style="heavy"
         ))
 
-        # Phase 0: Always run complexity assessment first
-        result = await self.phase_complexity_assessment()
+        results = []
+
+        # === PHASE 1: DISCOVERY ===
+        # Always run discovery first to get project structure
+        result = await self.phase_discovery()
+        results.append(result)
+        if not result.success:
+            print_status("Discovery failed", "error")
+            return False
+
+        # === PHASE 2: REQUIREMENTS GATHERING ===
+        # Gather requirements from user (interactive) or from task description
+        result = await self.phase_requirements(interactive)
+        results.append(result)
+        if not result.success:
+            print_status("Requirements gathering failed", "error")
+            return False
+
+        # === PHASE 3: AI COMPLEXITY ASSESSMENT ===
+        # Now that we have full requirements, assess complexity properly
+        result = await self.phase_complexity_assessment_with_requirements()
+        results.append(result)
         if not result.success:
             print_status("Complexity assessment failed", "error")
             return False
 
-        results = [result]
-
         # Map of all available phases
         all_phases = {
-            "discovery": lambda: self.phase_discovery(),
-            "requirements": lambda: self.phase_requirements(interactive),
             "research": lambda: self.phase_research(),
             "context": lambda: self.phase_context(),
             "spec_writing": lambda: self.phase_spec_writing(),
@@ -1099,15 +1251,16 @@ Output critique_report.json with:
             "quick_spec": lambda: self.phase_quick_spec(),
         }
 
-        # Get initial phases to run based on complexity
-        phases_to_run = self.assessment.phases_to_run()
-        initial_complexity = self.assessment.complexity
+        # Get remaining phases to run based on complexity (excluding discovery/requirements which are done)
+        all_phases_to_run = self.assessment.phases_to_run()
+        phases_to_run = [p for p in all_phases_to_run if p not in ["discovery", "requirements"]]
 
         print()
-        print(f"  Running {highlight(self.assessment.complexity.value.upper())} workflow ({highlight(str(len(phases_to_run)))} phases)")
+        print(f"  Running {highlight(self.assessment.complexity.value.upper())} workflow")
+        print(f"  {muted('Remaining phases:')} {', '.join(phases_to_run)}")
         print()
 
-        phases_executed = []
+        phases_executed = ["discovery", "requirements"]
         for phase_name in phases_to_run:
             if phase_name not in all_phases:
                 print_status(f"Unknown phase: {phase_name}, skipping", "warning")
@@ -1117,22 +1270,6 @@ Output critique_report.json with:
             result = await phase_fn()
             results.append(result)
             phases_executed.append(phase_name)
-
-            # After requirements phase, check if complexity changed (interactive mode)
-            if phase_name == "requirements" and self.assessment.complexity != initial_complexity:
-                new_phases = self.assessment.phases_to_run()
-                # Get remaining phases that weren't in original list
-                remaining_original = [p for p in phases_to_run if p not in phases_executed]
-                remaining_new = [p for p in new_phases if p not in phases_executed]
-
-                if remaining_original != remaining_new:
-                    print()
-                    print(f"  {muted('Complexity changed:')} {initial_complexity.value} → {highlight(self.assessment.complexity.value.upper())}")
-                    print(f"  {muted('Updating remaining phases...')}")
-                    # Replace remaining phases with new assessment
-                    phases_to_run = phases_executed + remaining_new
-                    print(f"  {muted('New phases:')} {', '.join(remaining_new)}")
-                    print()
 
             if not result.success:
                 print()
@@ -1234,6 +1371,11 @@ Examples:
         default="claude-opus-4-5-20251101",
         help="Model to use for agent phases",
     )
+    parser.add_argument(
+        "--no-ai-assessment",
+        action="store_true",
+        help="Use heuristic complexity assessment instead of AI (faster but less accurate)",
+    )
 
     args = parser.parse_args()
 
@@ -1271,6 +1413,7 @@ Examples:
         spec_name=args.continue_spec,
         model=args.model,
         complexity_override=args.complexity,
+        use_ai_assessment=not args.no_ai_assessment,
     )
 
     try:
