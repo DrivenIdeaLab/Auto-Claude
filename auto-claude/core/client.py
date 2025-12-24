@@ -164,6 +164,11 @@ def create_client(
     oauth_token = require_auth_token()
     # Ensure SDK can access it via its expected env var
     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+    
+    # CRITICAL: Remove ANTHROPIC_API_KEY from environment to prevent the CLI from
+    # preferring it over the OAuth token. The API key is only for Graphiti memory.
+    if "ANTHROPIC_API_KEY" in os.environ:
+        del os.environ["ANTHROPIC_API_KEY"]
 
     # Collect env vars to pass to SDK (ANTHROPIC_BASE_URL, etc.)
     sdk_env = get_sdk_env_vars()

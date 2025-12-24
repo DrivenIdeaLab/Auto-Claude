@@ -102,13 +102,21 @@ export class InsightsConfig {
     const autoBuildEnv = this.loadAutoBuildEnv();
     const profileEnv = getProfileEnv();
 
-    return {
+    // Only merge profileEnv if it has actual values (not empty default)
+    // This prevents the default profile {} from overwriting .env values
+    const mergedEnv = {
       ...process.env as Record<string, string>,
       ...autoBuildEnv,
-      ...profileEnv,
       PYTHONUNBUFFERED: '1',
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1'
     };
+
+    // Only add profileEnv values if they exist and are non-empty
+    if (Object.keys(profileEnv).length > 0) {
+      Object.assign(mergedEnv, profileEnv);
+    }
+
+    return mergedEnv;
   }
 }
