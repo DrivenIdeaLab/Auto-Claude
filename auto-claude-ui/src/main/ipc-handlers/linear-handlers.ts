@@ -6,12 +6,11 @@ import path from 'path';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync } from 'fs';
 import { projectStore } from '../project-store';
 import { parseEnvFile } from './utils';
-
-
 import { AgentManager } from '../agent';
+import { robustFetch } from '../utils/rate-limited-fetch';
 
 /**
- * Register all linear-related IPC handlers
+ * Register Linear handlers
  */
 export function registerLinearHandlers(
   agentManager: AgentManager,
@@ -41,16 +40,13 @@ export function registerLinearHandlers(
   /**
    * Make a request to the Linear API
    */
-  const linearGraphQL = async (
-    apiKey: string,
-    query: string,
-    variables?: Record<string, unknown>
-  ): Promise<unknown> => {
-    const response = await fetch('https://api.linear.app/graphql', {
+  // Helper to fetch from Linear
+  const fetchLinear = async (query: string, apiKey: string, variables: any = {}) => {
+    const response = await robustFetch('https://api.linear.app/graphql', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
+        'Authorization': apiKey
       },
       body: JSON.stringify({ query, variables })
     });

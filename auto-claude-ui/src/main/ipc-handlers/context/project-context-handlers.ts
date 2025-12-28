@@ -2,7 +2,6 @@ import { ipcMain } from 'electron';
 import type { BrowserWindow } from 'electron';
 import path from 'path';
 import { existsSync, readFileSync } from 'fs';
-import { spawn } from 'child_process';
 import { IPC_CHANNELS, getSpecsDir, AUTO_BUILD_PATHS } from '../../../shared/constants';
 import type {
   IPCResult,
@@ -21,6 +20,7 @@ import {
   buildMemoryStatus
 } from './memory-status-handlers';
 import { loadFileBasedMemories } from './memory-data-handlers';
+import { getProcessManager } from '../../utils/process-manager';
 
 /**
  * Load project index from file
@@ -157,26 +157,22 @@ export function registerProjectContextHandlers(
         const analyzerPath = path.join(autoBuildSource, 'analyzer.py');
         const indexOutputPath = path.join(project.path, AUTO_BUILD_PATHS.PROJECT_INDEX);
 
-        // Run analyzer
-        await new Promise<void>((resolve, reject) => {
-          const proc = spawn('python', [
+        // Run analyzer with timeout protection (2 minutes max)
+        const processManager = getProcessManager();
+        await processManager.execute({
+          id: `project-analyzer-${projectId}`,
+          command: 'python',
+          args: [
             analyzerPath,
             '--project-dir', project.path,
             '--output', indexOutputPath
-          ], {
+          ],
+          spawnOptions: {
             cwd: project.path,
             env: { ...process.env }
-          });
-
-          proc.on('close', (code: number) => {
-            if (code === 0) {
-              resolve();
-            } else {
-              reject(new Error(`Analyzer exited with code ${code}`));
-            }
-          });
-
-          proc.on('error', reject);
+          },
+          timeout: 2 * 60 * 1000, // 2 minutes
+          description: `Project analyzer for ${projectId}`
         });
 
         // Read the new index

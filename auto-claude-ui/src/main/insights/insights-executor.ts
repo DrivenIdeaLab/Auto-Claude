@@ -1,4 +1,3 @@
-import { spawn, ChildProcess } from 'child_process';
 import { existsSync, writeFileSync, unlinkSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -12,7 +11,8 @@ import type {
 } from '../../shared/types';
 import { MODEL_ID_MAP } from '../../shared/constants';
 import { InsightsConfig } from './config';
-import { detectRateLimit, createSDKRateLimitInfo } from '../rate-limit-detector';
+import { detectRateLimit, createSDKRateLimitInfo, detectCostLimit } from '../rate-limit-detector';
+import { getProcessManager } from '../utils/process-manager';
 
 /**
  * Message processor result
@@ -26,10 +26,12 @@ interface ProcessorResult {
 /**
  * Python process executor for insights
  * Handles spawning and managing the Python insights runner process
+ * Uses centralized ProcessManager for timeout protection and cleanup
  */
 export class InsightsExecutor extends EventEmitter {
   private config: InsightsConfig;
-  private activeSessions: Map<string, ChildProcess> = new Map();
+  private processManager = getProcessManager();
+  private readonly INSIGHTS_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 
   constructor(config: InsightsConfig) {
     super();
@@ -40,23 +42,18 @@ export class InsightsExecutor extends EventEmitter {
    * Check if a session is currently active
    */
   isSessionActive(projectId: string): boolean {
-    return this.activeSessions.has(projectId);
+    return this.processManager.isRunning(`insights-${projectId}`);
   }
 
   /**
    * Cancel an active session
    */
   cancelSession(projectId: string): boolean {
-    const existingProcess = this.activeSessions.get(projectId);
-    if (!existingProcess) return false;
-
-    existingProcess.kill();
-    this.activeSessions.delete(projectId);
-    return true;
+    return this.processManager.kill(`insights-${projectId}`);
   }
 
   /**
-   * Execute insights query
+   * Execute insights query with timeout protection
    */
   async execute(
     projectId: string,
@@ -117,112 +114,100 @@ export class InsightsExecutor extends EventEmitter {
       args.push('--thinking-level', modelConfig.thinkingLevel);
     }
 
-    // Spawn Python process
-    const proc = spawn(this.config.getPythonPath(), args, {
-      cwd: autoBuildSource,
-      env: processEnv
-    });
+    // Track state for streaming
+    let fullResponse = '';
+    let suggestedTask: InsightsChatMessage['suggestedTask'] | undefined;
+    const toolsUsed: InsightsToolUsage[] = [];
+    let allInsightsOutput = '';
 
-    this.activeSessions.set(projectId, proc);
+    // Setup stdout handler
+    const handleStdout = (id: string, data: string): void => {
+      if (id !== `insights-${projectId}`) return;
 
-    return new Promise((resolve, reject) => {
-      let fullResponse = '';
-      let suggestedTask: InsightsChatMessage['suggestedTask'] | undefined;
-      const toolsUsed: InsightsToolUsage[] = [];
-      let allInsightsOutput = '';
+      allInsightsOutput = (allInsightsOutput + data).slice(-10000);
 
-      proc.stdout?.on('data', (data: Buffer) => {
-        const text = data.toString();
-        // Collect output for rate limit detection (keep last 10KB)
-        allInsightsOutput = (allInsightsOutput + text).slice(-10000);
-
-        // Process output lines
-        const lines = text.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('__TASK_SUGGESTION__:')) {
-            this.handleTaskSuggestion(projectId, line, (task) => {
-              suggestedTask = task;
-            });
-          } else if (line.startsWith('__TOOL_START__:')) {
-            this.handleToolStart(projectId, line, toolsUsed);
-          } else if (line.startsWith('__TOOL_END__:')) {
-            this.handleToolEnd(projectId, line);
-          } else if (line.trim()) {
-            fullResponse += line + '\n';
-            this.emit('stream-chunk', projectId, {
-              type: 'text',
-              content: line + '\n'
-            } as InsightsStreamChunk);
-          }
-        }
-      });
-
-      proc.stderr?.on('data', (data: Buffer) => {
-        const text = data.toString();
-        // Collect stderr for rate limit detection too
-        allInsightsOutput = (allInsightsOutput + text).slice(-10000);
-        console.error('[Insights]', text);
-      });
-
-      proc.on('close', (code) => {
-        this.activeSessions.delete(projectId);
-
-        // Cleanup temp file
-        if (historyFileCreated && existsSync(historyFile)) {
-          try {
-            unlinkSync(historyFile);
-          } catch (cleanupErr) {
-            console.error('[Insights] Failed to cleanup history file:', cleanupErr);
-          }
-        }
-
-        // Check for rate limit if process failed
-        if (code !== 0) {
-          this.handleRateLimit(projectId, allInsightsOutput);
-        }
-
-        if (code === 0) {
-          this.emit('stream-chunk', projectId, {
-            type: 'done'
-          } as InsightsStreamChunk);
-
-          this.emit('status', projectId, {
-            phase: 'complete'
-          } as InsightsChatStatus);
-
-          resolve({
-            fullResponse: fullResponse.trim(),
-            suggestedTask,
-            toolsUsed
+      const lines = data.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('__TASK_SUGGESTION__:')) {
+          this.handleTaskSuggestion(projectId, line, (task) => {
+            suggestedTask = task;
           });
-        } else {
-          const error = `Process exited with code ${code}`;
+        } else if (line.startsWith('__TOOL_START__:')) {
+          this.handleToolStart(projectId, line, toolsUsed);
+        } else if (line.startsWith('__TOOL_END__:')) {
+          this.handleToolEnd(projectId, line);
+        } else if (line.trim()) {
+          fullResponse += line + '\n';
           this.emit('stream-chunk', projectId, {
-            type: 'error',
-            error
+            type: 'text',
+            content: line + '\n'
           } as InsightsStreamChunk);
-
-          this.emit('error', projectId, error);
-          reject(new Error(error));
         }
+      }
+    };
+
+    const handleStderr = (id: string, data: string): void => {
+      if (id !== `insights-${projectId}`) return;
+      allInsightsOutput = (allInsightsOutput + data).slice(-10000);
+    };
+
+    this.processManager.on('stdout', handleStdout);
+    this.processManager.on('stderr', handleStderr);
+
+    try {
+      // Execute with ProcessManager (with timeout)
+      await this.processManager.execute({
+        id: `insights-${projectId}`,
+        command: this.config.getPythonPath(),
+        args,
+        spawnOptions: {
+          cwd: autoBuildSource,
+          env: processEnv
+        },
+        timeout: this.INSIGHTS_TIMEOUT,
+        description: `Insights query for project ${projectId}`
       });
 
-      proc.on('error', (err) => {
-        this.activeSessions.delete(projectId);
+      // Success - cleanup and return result
+      this.emit('stream-chunk', projectId, {
+        type: 'done'
+      } as InsightsStreamChunk);
 
-        // Cleanup temp file
-        if (historyFileCreated && existsSync(historyFile)) {
-          try {
-            unlinkSync(historyFile);
-          } catch (cleanupErr) {
-            console.error('[Insights] Failed to cleanup history file:', cleanupErr);
-          }
+      this.emit('status', projectId, {
+        phase: 'complete'
+      } as InsightsChatStatus);
+
+      return {
+        fullResponse: fullResponse.trim(),
+        suggestedTask,
+        toolsUsed
+      };
+    } catch (err) {
+      // Check for rate limit
+      this.handleRateLimit(projectId, allInsightsOutput);
+
+      const error = err instanceof Error ? err.message : 'Insights execution failed';
+      this.emit('stream-chunk', projectId, {
+        type: 'error',
+        error
+      } as InsightsStreamChunk);
+
+      this.emit('error', projectId, error);
+      throw err;
+    } finally {
+      // Cleanup handlers
+      this.processManager.off('stdout', handleStdout);
+      this.processManager.off('stderr', handleStderr);
+
+      // Cleanup temp file
+      if (historyFileCreated && existsSync(historyFile)) {
+        try {
+          unlinkSync(historyFile);
+        } catch (cleanupErr) {
+          console.error('[Insights] Failed to cleanup history file:', cleanupErr);
         }
-
-        this.emit('error', projectId, err.message);
-        reject(err);
-      });
-    });
+      }
+    }
   }
 
   /**
@@ -297,6 +282,19 @@ export class InsightsExecutor extends EventEmitter {
    * Handle rate limit detection
    */
   private handleRateLimit(projectId: string, output: string): void {
+    // Check for cost limit first (more critical)
+    const costLimitDetection = detectCostLimit(output);
+    if (costLimitDetection.isCostLimited) {
+      console.warn('[Insights] Cost limit detected:', { projectId });
+      this.emit('cost-limit', {
+        projectId,
+        profileId: costLimitDetection.profileId,
+        message: costLimitDetection.message,
+        originalError: costLimitDetection.originalError
+      });
+      return;
+    }
+
     const rateLimitDetection = detectRateLimit(output);
     if (rateLimitDetection.isRateLimited) {
       console.warn('[Insights] Rate limit detected:', {

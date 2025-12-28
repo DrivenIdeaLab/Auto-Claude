@@ -111,6 +111,9 @@ def sync_plan_to_source(spec_dir: Path, source_spec_dir: Path | None) -> bool:
         shutil.copy2(plan_file, source_plan_file)
         logger.debug(f"Synced implementation plan to source: {source_plan_file}")
         return True
-    except Exception as e:
+    except (OSError, PermissionError, shutil.Error) as e:
         logger.warning(f"Failed to sync implementation plan to source: {e}")
+        return False
+    except FileNotFoundError as e:
+        logger.warning(f"Plan file not found during sync: {e}")
         return False

@@ -1,5 +1,6 @@
 import { ipcRenderer } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants';
+import { APPROVAL_CHANNELS, ApprovalAction, ApprovalRequest } from '../../shared/constants/approval';
 import type {
   Task,
   IPCResult,
@@ -42,6 +43,15 @@ export interface TaskAPI {
     options?: import('../../shared/types').TaskRecoveryOptions
   ) => Promise<IPCResult<TaskRecoveryResult>>;
   checkTaskRunning: (taskId: string) => Promise<IPCResult<boolean>>;
+
+  // Approval Workflow
+  requestApproval: (taskId: string, stage: 'spec' | 'qa' | 'final', projectId: string) => Promise<ApprovalRequest | null>;
+  submitApproval: (taskId: string, projectId: string, action: ApprovalAction, comment?: string) => Promise<boolean>;
+
+  // Scheduled Restart Management
+  getScheduledRestart: (taskId: string) => Promise<IPCResult<{ scheduled: boolean; fireAt?: string }>>;
+  cancelScheduledRestart: (taskId: string) => Promise<IPCResult>;
+  runScheduledTaskNow: (taskId: string) => Promise<IPCResult>;
 
   // Workspace Management (for human review)
   getWorktreeStatus: (taskId: string) => Promise<IPCResult<import('../../shared/types').WorktreeStatus>>;
@@ -119,6 +129,23 @@ export const createTaskAPI = (): TaskAPI => ({
 
   checkTaskRunning: (taskId: string): Promise<IPCResult<boolean>> =>
     ipcRenderer.invoke(IPC_CHANNELS.TASK_CHECK_RUNNING, taskId),
+
+  // Approval Workflow
+  requestApproval: (taskId: string, stage: 'spec' | 'qa' | 'final', projectId: string): Promise<ApprovalRequest | null> =>
+    ipcRenderer.invoke(APPROVAL_CHANNELS.REQUEST_APPROVAL, taskId, stage, projectId),
+
+  submitApproval: (taskId: string, projectId: string, action: ApprovalAction, comment?: string): Promise<boolean> =>
+    ipcRenderer.invoke(APPROVAL_CHANNELS.SUBMIT_APPROVAL, taskId, projectId, action, comment),
+
+  // Scheduled Restart Management
+  getScheduledRestart: (taskId: string): Promise<IPCResult<{ scheduled: boolean; fireAt?: string }>> =>
+    ipcRenderer.invoke('task:get-scheduled-restart', taskId),
+
+  cancelScheduledRestart: (taskId: string): Promise<IPCResult> =>
+    ipcRenderer.invoke('task:cancel-scheduled-restart', taskId),
+
+  runScheduledTaskNow: (taskId: string): Promise<IPCResult> =>
+    ipcRenderer.invoke('task:run-scheduled-now', taskId),
 
   // Workspace Management
   getWorktreeStatus: (taskId: string): Promise<IPCResult<import('../../shared/types').WorktreeStatus>> =>

@@ -213,4 +213,104 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
 
     tools.append(get_session_context)
 
+    # -------------------------------------------------------------------------
+    # Tool: get_merge_history
+    # -------------------------------------------------------------------------
+    @tool(
+        "get_merge_history",
+        "Get the merge history for this spec, including which files were merged and when.",
+        {},
+    )
+    async def get_merge_history(args: dict[str, Any]) -> dict[str, Any]:
+        """Get merge history from previous merges."""
+        memory_dir = spec_dir / "memory"
+        merge_history_file = memory_dir / "merge_history.json"
+
+        if not merge_history_file.exists():
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "No merge history found. This spec has not been merged yet.",
+                    }
+                ]
+            }
+
+        try:
+            with open(merge_history_file) as f:
+                merge_history = json.load(f)
+
+            merges = merge_history.get("merges", [])
+            if not merges:
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "No merge history found.",
+                        }
+                    ]
+                }
+
+            # Show last merge and summary
+            last_merge = merges[-1]
+            total_merges = len(merges)
+
+            result_parts = [
+                "## Merge History",
+                "",
+                f"**Total merges:** {total_merges}",
+                "",
+                "### Last Merge",
+                "",
+                f"**Timestamp:** {last_merge.get('timestamp', 'unknown')}",
+                f"**Commit:** `{last_merge.get('merge_commit', 'unknown')[:12]}`",
+                "",
+                "**Statistics:**",
+            ]
+
+            stats = last_merge.get("stats", {})
+            result_parts.extend([
+                f"- Total files merged: {stats.get('total_files', 0)}",
+                f"- Conflicts resolved: {stats.get('conflicts_resolved', 0)}",
+                f"- AI-assisted merges: {stats.get('ai_assisted', 0)}",
+                f"- Auto-merged files: {stats.get('auto_merged', 0)}",
+            ])
+
+            conflicting_files = last_merge.get("conflicting_files", [])
+            if conflicting_files:
+                result_parts.extend([
+                    "",
+                    f"**Conflicting files resolved:** {len(conflicting_files)}",
+                ])
+                for file_path in conflicting_files[:10]:  # Limit to 10
+                    result_parts.append(f"- `{file_path}`")
+                if len(conflicting_files) > 10:
+                    result_parts.append(f"- ... and {len(conflicting_files) - 10} more")
+
+            # Show previous merges summary if any
+            if total_merges > 1:
+                result_parts.extend([
+                    "",
+                    "### Previous Merges",
+                    "",
+                ])
+                for merge in merges[-6:-1]:  # Show up to 5 previous merges
+                    timestamp = merge.get("timestamp", "unknown")
+                    files_count = len(merge.get("files_merged", []))
+                    result_parts.append(f"- {timestamp[:19]}: {files_count} files merged")
+
+            return {"content": [{"type": "text", "text": "\n".join(result_parts)}]}
+
+        except (json.JSONDecodeError, OSError) as e:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Error reading merge history: {e}",
+                    }
+                ]
+            }
+
+    tools.append(get_merge_history)
+
     return tools

@@ -1,5 +1,4 @@
 import { EventEmitter } from 'events';
-import { spawn } from 'child_process';
 import * as path from 'path';
 import * as os from 'os';
 import type {
@@ -13,14 +12,16 @@ import { extractChangelog } from './parser';
 import { getCommits, getBranchDiffCommits } from './git-integration';
 import { detectRateLimit, createSDKRateLimitInfo, getProfileEnv } from '../rate-limit-detector';
 import { parsePythonCommand } from '../python-detector';
+import { getProcessManager } from '../utils/process-manager';
 
 /**
  * Core changelog generation logic
- * Handles AI generation via Claude CLI subprocess
+ * Handles AI generation via Claude CLI subprocess with timeout protection
  */
 export class ChangelogGenerator extends EventEmitter {
-  private generationProcesses: Map<string, ReturnType<typeof spawn>> = new Map();
+  private processManager = getProcessManager();
   private debugEnabled: boolean;
+  private readonly CHANGELOG_TIMEOUT = 2 * 60 * 1000; // 2 minutes
 
   constructor(
     private pythonPath: string,
@@ -134,7 +135,6 @@ export class ChangelogGenerator extends EventEmitter {
       message: 'Generating changelog with Claude AI...'
     });
 
-    const startTime = Date.now();
     this.debug('Spawning Python process...');
 
     // Build environment with explicit critical variables
@@ -142,101 +142,99 @@ export class ChangelogGenerator extends EventEmitter {
 
     // Parse Python command to handle space-separated commands like "py -3"
     const [pythonCommand, pythonBaseArgs] = parsePythonCommand(this.pythonPath);
-    const childProcess = spawn(pythonCommand, [...pythonBaseArgs, '-c', script], {
-      cwd: this.autoBuildSourcePath,
-      env: spawnEnv
-    });
 
-    this.generationProcesses.set(projectId, childProcess);
-    this.debug('Process spawned with PID:', childProcess.pid);
+    // Track stdout/stderr for rate limit detection
+    let allOutput = '';
 
-    let output = '';
-    let errorOutput = '';
-
-    childProcess.stdout?.on('data', (data: Buffer) => {
-      const chunk = data.toString();
-      output += chunk;
-      this.debug('stdout chunk received', { chunkLength: chunk.length, totalOutput: output.length });
+    // Setup event handlers for progress updates
+    const handleStdout = (id: string, data: string): void => {
+      if (id !== `changelog-${projectId}`) return;
+      allOutput += data;
+      this.debug('stdout chunk received', { chunkLength: data.length });
 
       this.emitProgress(projectId, {
         stage: 'generating',
         progress: 50,
         message: 'Generating changelog content...'
       });
-    });
+    };
 
-    childProcess.stderr?.on('data', (data: Buffer) => {
-      const chunk = data.toString();
-      errorOutput += chunk;
-      this.debug('stderr chunk received', { chunk: chunk.substring(0, 200) });
-    });
+    const handleStderr = (id: string, data: string): void => {
+      if (id !== `changelog-${projectId}`) return;
+      allOutput += data;
+      this.debug('stderr chunk received', { chunk: data.substring(0, 200) });
+    };
 
-    childProcess.on('exit', (code: number | null) => {
-      const duration = Date.now() - startTime;
-      this.debug('Process exited', {
-        code,
-        duration: `${duration}ms`,
-        outputLength: output.length,
-        errorLength: errorOutput.length
+    this.processManager.on('stdout', handleStdout);
+    this.processManager.on('stderr', handleStderr);
+
+    try {
+      // Execute with ProcessManager (with timeout)
+      const result = await this.processManager.execute({
+        id: `changelog-${projectId}`,
+        command: pythonCommand,
+        args: [...pythonBaseArgs, '-c', script],
+        spawnOptions: {
+          cwd: this.autoBuildSourcePath,
+          env: spawnEnv
+        },
+        timeout: this.CHANGELOG_TIMEOUT,
+        description: `Changelog generation for project ${projectId}`
       });
 
-      this.generationProcesses.delete(projectId);
+      this.debug('Process completed', {
+        duration: `${result.duration}ms`,
+        outputLength: result.stdout.length
+      });
 
-      if (code === 0 && output.trim()) {
-        this.emitProgress(projectId, {
-          stage: 'formatting',
-          progress: 90,
-          message: 'Formatting changelog...'
+      // Success - extract and emit changelog
+      this.emitProgress(projectId, {
+        stage: 'formatting',
+        progress: 90,
+        message: 'Formatting changelog...'
+      });
+
+      const changelog = extractChangelog(result.stdout.trim());
+      this.debug('Changelog extracted', { changelogLength: changelog.length });
+
+      this.emitProgress(projectId, {
+        stage: 'complete',
+        progress: 100,
+        message: 'Changelog generation complete'
+      });
+
+      const generationResult: ChangelogGenerationResult = {
+        success: true,
+        changelog,
+        version: request.version,
+        tasksIncluded: itemCount
+      };
+
+      this.debug('Generation complete, emitting result');
+      this.emit('generation-complete', projectId, generationResult);
+    } catch (err) {
+      // Check for rate limit in all collected output
+      const rateLimitDetection = detectRateLimit(allOutput);
+      if (rateLimitDetection.isRateLimited) {
+        this.debug('Rate limit detected in changelog generation', {
+          resetTime: rateLimitDetection.resetTime,
+          limitType: rateLimitDetection.limitType,
+          suggestedProfile: rateLimitDetection.suggestedProfile?.name
         });
 
-        // Extract changelog from output
-        const changelog = extractChangelog(output.trim());
-        this.debug('Changelog extracted', { changelogLength: changelog.length });
-
-        this.emitProgress(projectId, {
-          stage: 'complete',
-          progress: 100,
-          message: 'Changelog generation complete'
-        });
-
-        const result: ChangelogGenerationResult = {
-          success: true,
-          changelog,
-          version: request.version,
-          tasksIncluded: itemCount
-        };
-
-        this.debug('Generation complete, emitting result');
-        this.emit('generation-complete', projectId, result);
-      } else {
-        // Combine all output for error analysis
-        const combinedOutput = `${output}\n${errorOutput}`;
-        const error = errorOutput || `Generation failed with exit code ${code}`;
-
-        // Check for rate limit
-        const rateLimitDetection = detectRateLimit(combinedOutput);
-        if (rateLimitDetection.isRateLimited) {
-          this.debug('Rate limit detected in changelog generation', {
-            resetTime: rateLimitDetection.resetTime,
-            limitType: rateLimitDetection.limitType,
-            suggestedProfile: rateLimitDetection.suggestedProfile?.name
-          });
-
-          // Emit rate limit event
-          const rateLimitInfo = createSDKRateLimitInfo('changelog', rateLimitDetection, { projectId });
-          this.emit('rate-limit', projectId, rateLimitInfo);
-        }
-
-        this.debug('Generation failed', { error: error.substring(0, 500), isRateLimited: rateLimitDetection.isRateLimited });
-        this.emitError(projectId, error);
+        // Emit rate limit event
+        const rateLimitInfo = createSDKRateLimitInfo('changelog', rateLimitDetection, { projectId });
+        this.emit('rate-limit', projectId, rateLimitInfo);
       }
-    });
 
-    childProcess.on('error', (err: Error) => {
-      this.debug('Process error', { error: err.message });
-      this.generationProcesses.delete(projectId);
-      this.emitError(projectId, err.message);
-    });
+      const error = err instanceof Error ? err.message : 'Changelog generation failed';
+      this.debug('Generation failed', { error: error.substring(0, 500), isRateLimited: rateLimitDetection.isRateLimited });
+      this.emitError(projectId, error);
+    } finally {
+      // Cleanup handlers
+      this.processManager.off('stdout', handleStdout);
+      this.processManager.off('stderr', handleStderr);
+    }
   }
 
   /**
@@ -299,13 +297,7 @@ export class ChangelogGenerator extends EventEmitter {
    * Cancel ongoing generation
    */
   cancel(projectId: string): boolean {
-    const process = this.generationProcesses.get(projectId);
-    if (process) {
-      process.kill('SIGTERM');
-      this.generationProcesses.delete(projectId);
-      return true;
-    }
-    return false;
+    return this.processManager.kill(`changelog-${projectId}`);
   }
 
   /**

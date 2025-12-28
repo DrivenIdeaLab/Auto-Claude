@@ -10,7 +10,11 @@
  */
 
 import { EventEmitter } from 'events';
+import { BrowserWindow } from 'electron';
 import { getClaudeProfileManager } from '../claude-profile-manager';
+import { robustFetch } from '../utils/rate-limited-fetch';
+import { IPC_CHANNELS } from '../../shared/constants';
+import { AgentManager } from '../agent';
 import { ClaudeUsageSnapshot } from '../../shared/types/agent';
 
 export class UsageMonitor extends EventEmitter {
@@ -177,14 +181,16 @@ export class UsageMonitor extends EventEmitter {
     oauthToken: string,
     profileId: string,
     profileName: string
-  ): Promise<ClaudeUsageSnapshot | null> {
+  ): Promise<boolean> {
     try {
-      const response = await fetch('https://api.anthropic.com/api/oauth/usage', {
-        method: 'GET',
+      const response = await robustFetch('https://api.anthropic.com/api/oauth/usage', {
         headers: {
           'Authorization': `Bearer ${oauthToken}`,
-          'Content-Type': 'application/json',
-          'anthropic-version': '2023-06-01'
+          'User-Agent': 'Claude-Code/0.2.29 (darwin-x64) auto-claude-ui'
+        },
+        retry: {
+          // Usage data is critical but not urgent, so we can retry a few times
+          maxRetries: 3
         }
       });
 

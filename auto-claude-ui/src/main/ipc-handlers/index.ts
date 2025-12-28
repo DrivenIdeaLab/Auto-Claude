@@ -9,6 +9,7 @@ import type { BrowserWindow } from 'electron';
 import { AgentManager } from '../agent';
 import { TerminalManager } from '../terminal-manager';
 import { PythonEnvManager } from '../python-env-manager';
+import type { EnvValidationResult } from '../env-validator';
 
 // Import all handler registration functions
 import { registerProjectHandlers } from './project-handlers';
@@ -37,12 +38,14 @@ import { notificationService } from '../notification-service';
  * @param terminalManager - The terminal manager instance
  * @param getMainWindow - Function to get the main BrowserWindow
  * @param pythonEnvManager - The Python environment manager instance
+ * @param getValidationResult - Optional function to get environment validation results
  */
 export function setupIpcHandlers(
   agentManager: AgentManager,
   terminalManager: TerminalManager,
   getMainWindow: () => BrowserWindow | null,
-  pythonEnvManager: PythonEnvManager
+  pythonEnvManager: PythonEnvManager,
+  getValidationResult?: () => EnvValidationResult | null
 ): void {
   // Initialize notification service
   notificationService.initialize(getMainWindow);
@@ -72,7 +75,7 @@ export function setupIpcHandlers(
   registerContextHandlers(getMainWindow);
 
   // Environment configuration handlers
-  registerEnvHandlers(getMainWindow);
+  registerEnvHandlers(getMainWindow, getValidationResult);
 
   // Linear integration handlers
   registerLinearHandlers(agentManager, getMainWindow);

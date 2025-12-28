@@ -1,7 +1,6 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import { existsSync, readFileSync } from 'fs';
-import { app } from 'electron';
 import { EventEmitter } from 'events';
 import { AgentState } from './agent-state';
 import { AgentEvents } from './agent-events';
@@ -10,6 +9,7 @@ import { detectRateLimit, createSDKRateLimitInfo, getProfileEnv, detectAuthFailu
 import { projectStore } from '../project-store';
 import { getClaudeProfileManager } from '../claude-profile-manager';
 import { findPythonCommand, parsePythonCommand } from '../python-detector';
+import { getEffectiveSourcePath, validateAutoBuildSource } from '../utils/path-resolver';
 
 /**
  * Process spawning and lifecycle management
@@ -49,30 +49,25 @@ export class AgentProcessManager {
 
   /**
    * Get the auto-claude source path (detects automatically if not configured)
+   * Uses centralized path resolver for production compatibility
    */
   getAutoBuildSourcePath(): string | null {
-    // If manually configured, use that
-    if (this.autoBuildSourcePath && existsSync(this.autoBuildSourcePath)) {
-      return this.autoBuildSourcePath;
-    }
-
-    // Auto-detect from app location
-    const possiblePaths = [
-      // Dev mode: from dist/main -> ../../auto-claude (sibling to auto-claude-ui)
-      path.resolve(__dirname, '..', '..', '..', 'auto-claude'),
-      // Alternative: from app root
-      path.resolve(app.getAppPath(), '..', 'auto-claude'),
-      // If running from repo root
-      path.resolve(process.cwd(), 'auto-claude')
-    ];
-
-    for (const p of possiblePaths) {
-      // Use requirements.txt as marker - it always exists in auto-claude source
-      if (existsSync(p) && existsSync(path.join(p, 'requirements.txt'))) {
-        return p;
+    // If manually configured, validate and use it
+    if (this.autoBuildSourcePath) {
+      if (validateAutoBuildSource(this.autoBuildSourcePath)) {
+        return this.autoBuildSourcePath;
       }
+      console.warn(`[AgentProcessManager] Configured path invalid: ${this.autoBuildSourcePath}`);
     }
-    return null;
+
+    // Use centralized path resolution (handles production + dev)
+    const detectedPath = getEffectiveSourcePath();
+
+    if (!detectedPath) {
+      console.error('[AgentProcessManager] Failed to detect auto-claude source path');
+    }
+
+    return detectedPath;
   }
 
   /**

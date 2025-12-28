@@ -349,6 +349,12 @@ export class ProjectStore {
           }
         }
 
+        // Read approval data from implementation_plan.json if it exists
+        if (plan && (plan as unknown as { metadata?: { approval?: unknown } }).metadata?.approval) {
+          if (!metadata) metadata = {};
+          metadata.approval = (plan as unknown as { metadata: { approval: unknown } }).metadata.approval as import('../shared/constants/approval').ApprovalRequest;
+        }
+
         // Determine task status and review reason from plan
         const { status, reviewReason } = this.determineTaskStatusAndReason(plan, specPath, metadata);
 

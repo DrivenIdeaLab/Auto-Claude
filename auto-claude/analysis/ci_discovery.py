@@ -23,6 +23,7 @@ Usage:
 """
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,8 @@ try:
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -227,7 +230,11 @@ class CIDiscovery:
                 if isinstance(env, dict):
                     result.environment_variables.extend(env.keys())
 
-            except Exception:
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Could not read workflow file {wf_file}: {e}")
+                continue
+            except yaml.YAMLError if HAS_YAML else ValueError as e:
+                logger.warning(f"Failed to parse YAML in {wf_file}: {e}")
                 continue
 
         return result
@@ -297,8 +304,10 @@ class CIDiscovery:
             if isinstance(variables, dict):
                 result.environment_variables.extend(variables.keys())
 
-        except Exception:
-            pass
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Could not read GitLab CI config {config_file}: {e}")
+        except yaml.YAMLError if HAS_YAML else ValueError as e:
+            logger.warning(f"Failed to parse GitLab CI YAML: {e}")
 
         return result
 
@@ -355,8 +364,10 @@ class CIDiscovery:
                     )
                 )
 
-        except Exception:
-            pass
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Could not read CircleCI config {config_file}: {e}")
+        except yaml.YAMLError if HAS_YAML else ValueError as e:
+            logger.warning(f"Failed to parse CircleCI YAML: {e}")
 
         return result
 
@@ -400,8 +411,10 @@ class CIDiscovery:
                     )
                 )
 
-        except Exception:
-            pass
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Could not read Jenkinsfile {jenkinsfile}: {e}")
+        except UnicodeDecodeError as e:
+            logger.warning(f"Failed to decode Jenkinsfile: {e}")
 
         return result
 
@@ -410,7 +423,8 @@ class CIDiscovery:
         if HAS_YAML:
             try:
                 return yaml.safe_load(content)
-            except Exception:
+            except yaml.YAMLError as e:
+                logger.warning(f"YAML parsing failed: {e}")
                 return None
 
         # Basic fallback for simple YAML (very limited)

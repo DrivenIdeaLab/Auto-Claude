@@ -1,12 +1,19 @@
 # Auto-Build Framework Dependencies
+# =====================================
+# Python 3.10+: Core features (spec creation, implementation, QA)
+# Python 3.12+: Full features including Graphiti Memory Layer
+
+# Core dependencies (Python 3.10+)
 claude-agent-sdk>=0.1.16
 python-dotenv>=1.0.0
 
 # TOML parsing fallback for Python < 3.11
 tomli>=2.0.0; python_version < "3.11"
 
-# Memory Integration - LadybugDB (embedded graph database)
-# Requires Python 3.12+ (no Docker required)
+# Memory Layer - Graphiti Integration (Python 3.12+ only)
+# --------------------------------------------------------
+# LadybugDB (embedded graph database) and Graphiti require Python 3.12+
+# On Python 3.10-3.11, Auto Claude will gracefully fall back to file-based memory
 real_ladybug>=0.13.0; python_version >= "3.12"
 graphiti-core>=0.5.0; python_version >= "3.12"
 

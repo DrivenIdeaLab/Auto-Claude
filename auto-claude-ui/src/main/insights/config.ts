@@ -1,8 +1,8 @@
 import path from 'path';
 import { existsSync, readFileSync } from 'fs';
-import { app } from 'electron';
 import { getProfileEnv } from '../rate-limit-detector';
 import { findPythonCommand } from '../python-detector';
+import { getEffectiveSourcePath, validateAutoBuildSource } from '../utils/path-resolver';
 
 /**
  * Configuration manager for insights service
@@ -34,25 +34,25 @@ export class InsightsConfig {
 
   /**
    * Get the auto-claude source path (detects automatically if not configured)
+   * Uses centralized path resolver for production compatibility
    */
   getAutoBuildSourcePath(): string | null {
-    if (this.autoBuildSourcePath && existsSync(this.autoBuildSourcePath)) {
-      return this.autoBuildSourcePath;
-    }
-
-    const possiblePaths = [
-      path.resolve(__dirname, '..', '..', '..', 'auto-claude'),
-      path.resolve(app.getAppPath(), '..', 'auto-claude'),
-      path.resolve(process.cwd(), 'auto-claude')
-    ];
-
-    for (const p of possiblePaths) {
-      // Use requirements.txt as marker - it always exists in auto-claude source
-      if (existsSync(p) && existsSync(path.join(p, 'requirements.txt'))) {
-        return p;
+    // If manually configured, validate and use it
+    if (this.autoBuildSourcePath) {
+      if (validateAutoBuildSource(this.autoBuildSourcePath)) {
+        return this.autoBuildSourcePath;
       }
+      console.warn(`[InsightsConfig] Configured path invalid: ${this.autoBuildSourcePath}`);
     }
-    return null;
+
+    // Use centralized path resolution (handles production + dev)
+    const detectedPath = getEffectiveSourcePath();
+
+    if (!detectedPath) {
+      console.error('[InsightsConfig] Failed to detect auto-claude source path');
+    }
+
+    return detectedPath;
   }
 
   /**

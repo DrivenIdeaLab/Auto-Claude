@@ -1,11 +1,14 @@
 import path from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { spawn } from 'child_process';
-import { app } from 'electron';
 import { EventEmitter } from 'events';
 import { detectRateLimit, createSDKRateLimitInfo, getProfileEnv } from './rate-limit-detector';
+
 import { parsePythonCommand } from './python-detector';
 import { pythonEnvManager } from './python-env-manager';
+
+import { findPythonCommand, parsePythonCommand } from './python-detector';
+import { getEffectiveSourcePath, validateAutoBuildSource } from './utils/path-resolver';
 
 /**
  * Debug logging - only logs when DEBUG=true or in development mode
@@ -40,25 +43,25 @@ export class TerminalNameGenerator extends EventEmitter {
 
   /**
    * Get the auto-claude source path (detects automatically if not configured)
+   * Uses centralized path resolver for production compatibility
    */
   private getAutoBuildSourcePath(): string | null {
-    if (this.autoBuildSourcePath && existsSync(this.autoBuildSourcePath)) {
-      return this.autoBuildSourcePath;
-    }
-
-    const possiblePaths = [
-      path.resolve(__dirname, '..', '..', '..', 'auto-claude'),
-      path.resolve(app.getAppPath(), '..', 'auto-claude'),
-      path.resolve(process.cwd(), 'auto-claude')
-    ];
-
-    for (const p of possiblePaths) {
-      // Use requirements.txt as marker - it always exists in auto-claude source
-      if (existsSync(p) && existsSync(path.join(p, 'requirements.txt'))) {
-        return p;
+    // If manually configured, validate and use it
+    if (this.autoBuildSourcePath) {
+      if (validateAutoBuildSource(this.autoBuildSourcePath)) {
+        return this.autoBuildSourcePath;
       }
+      debug('Configured path invalid:', this.autoBuildSourcePath);
     }
-    return null;
+
+    // Use centralized path resolution (handles production + dev)
+    const detectedPath = getEffectiveSourcePath();
+
+    if (!detectedPath) {
+      debug('Failed to detect auto-claude source path');
+    }
+
+    return detectedPath;
   }
 
   /**

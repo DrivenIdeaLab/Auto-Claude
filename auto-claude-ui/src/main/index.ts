@@ -8,6 +8,10 @@ import { pythonEnvManager } from './python-env-manager';
 import { getUsageMonitor } from './claude-profile/usage-monitor';
 import { initializeUsageMonitorForwarding } from './ipc-handlers/terminal-handlers';
 import { initializeAppUpdater } from './app-updater';
+import { validateEnvironment, showValidationDialog, logValidationResults } from './env-validator';
+import type { EnvValidationResult } from './env-validator';
+import { existsSync, readFileSync } from 'fs';
+import type { AppSettings } from '../shared/types';
 
 // Get icon path based on platform
 function getIconPath(): string {
@@ -35,6 +39,7 @@ function getIconPath(): string {
 let mainWindow: BrowserWindow | null = null;
 let agentManager: AgentManager | null = null;
 let terminalManager: TerminalManager | null = null;
+let envValidationResult: EnvValidationResult | null = null;
 
 function createWindow(): void {
   // Create the browser window
@@ -58,8 +63,23 @@ function createWindow(): void {
   });
 
   // Show window when ready to avoid visual flash
-  mainWindow.on('ready-to-show', () => {
+  mainWindow.on('ready-to-show', async () => {
     mainWindow?.show();
+
+    // Show validation dialog if there are issues (after a short delay to let window render)
+    if (envValidationResult && (
+      envValidationResult.issues.some(i => i.severity === 'critical' || i.severity === 'warning')
+    )) {
+      setTimeout(async () => {
+        await showValidationDialog(envValidationResult!, mainWindow);
+
+        // If critical errors prevent startup, optionally quit (or let user proceed to settings)
+        if (!envValidationResult!.canStart) {
+          console.error('[main] Critical validation errors - app may not function correctly');
+          // Note: We don't quit automatically - let user access settings to fix issues
+        }
+      }, 1000);
+    }
   });
 
   // Handle external links
@@ -94,7 +114,7 @@ if (process.platform === 'darwin') {
 }
 
 // Initialize the application
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Set app user model id for Windows
   electronApp.setAppUserModelId('com.autoclaude.ui');
 
@@ -123,8 +143,32 @@ app.whenReady().then(() => {
   // Initialize terminal manager
   terminalManager = new TerminalManager(() => mainWindow);
 
-  // Setup IPC handlers (pass pythonEnvManager for Python path management)
-  setupIpcHandlers(agentManager, terminalManager, () => mainWindow, pythonEnvManager);
+  // Setup IPC handlers (pass pythonEnvManager for Python path management and validation result getter)
+  setupIpcHandlers(
+    agentManager,
+    terminalManager,
+    () => mainWindow,
+    pythonEnvManager,
+    () => envValidationResult
+  );
+
+  // Load settings to get autoBuildPath
+  const settingsPath = join(app.getPath('userData'), 'settings.json');
+  let autoBuildPath: string | undefined;
+  if (existsSync(settingsPath)) {
+    try {
+      const settingsContent = readFileSync(settingsPath, 'utf-8');
+      const settings: AppSettings = JSON.parse(settingsContent);
+      autoBuildPath = settings.autoBuildPath;
+    } catch (error) {
+      console.warn('[main] Failed to load settings for validation:', error);
+    }
+  }
+
+  // Validate environment before creating window
+  console.warn('[main] Running environment validation...');
+  envValidationResult = await validateEnvironment(autoBuildPath);
+  logValidationResults(envValidationResult);
 
   // Create window
   createWindow();

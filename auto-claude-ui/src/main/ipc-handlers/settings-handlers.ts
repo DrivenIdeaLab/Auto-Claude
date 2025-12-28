@@ -2,7 +2,6 @@ import { ipcMain, dialog, app, shell } from 'electron';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { execSync } from 'child_process';
 import path from 'path';
-import { is } from '@electron-toolkit/utils';
 import { IPC_CHANNELS, DEFAULT_APP_SETTINGS } from '../../shared/constants';
 import type {
   AppSettings,
@@ -11,14 +10,18 @@ import type {
 import { AgentManager } from '../agent';
 import type { BrowserWindow } from 'electron';
 import { getEffectiveVersion } from '../auto-claude-updater';
+import { getEffectiveSourcePath } from '../utils/path-resolver';
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 
 /**
  * Auto-detect the auto-claude source path relative to the app location.
  * Works across platforms (macOS, Windows, Linux) in both dev and production modes.
+ *
+ * @deprecated Use getEffectiveSourcePath from '../utils/path-resolver' instead
  */
 const detectAutoBuildSourcePath = (): string | null => {
+
   const possiblePaths: string[] = [];
 
   // Development mode paths
@@ -78,6 +81,8 @@ const detectAutoBuildSourcePath = (): string | null => {
   console.warn('[detectAutoBuildSourcePath] Could not auto-detect Auto Claude source path. Please configure manually in settings.');
   console.warn('[detectAutoBuildSourcePath] Set DEBUG=1 environment variable for detailed path checking.');
   return null;
+
+  return getEffectiveSourcePath();
 };
 
 /**

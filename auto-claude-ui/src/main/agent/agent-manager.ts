@@ -6,10 +6,15 @@ import { AgentEvents } from './agent-events';
 import { AgentProcessManager } from './agent-process';
 import { AgentQueueManager } from './agent-queue';
 import { getClaudeProfileManager } from '../claude-profile-manager';
+import { parseResetTime } from '../claude-profile/usage-parser';
 import {
   SpecCreationMetadata,
   TaskExecutionOptions,
+
   RoadmapConfig
+
+  IdeationConfig,
+  SDKRateLimitInfo
 } from './types';
 import type { IdeationConfig } from '../../shared/types';
 
@@ -32,6 +37,7 @@ export class AgentManager extends EventEmitter {
     metadata?: SpecCreationMetadata;
     swapCount: number;
   }> = new Map();
+  private scheduledRestarts: Map<string, { timeout: NodeJS.Timeout; fireAt: Date }> = new Map();
 
   constructor() {
     super();
@@ -49,6 +55,13 @@ export class AgentManager extends EventEmitter {
       console.log('[AgentManager] Task restart result:', success ? 'SUCCESS' : 'FAILED');
     });
 
+    // Listen for rate limit events to schedule automatic resumption
+    this.on('sdk-rate-limit', (info: SDKRateLimitInfo) => {
+      if (info.taskId && info.resetTime && !info.wasAutoSwapped) {
+        this.scheduleRestartAfterRateLimit(info.taskId, info.resetTime);
+      }
+    });
+
     // Listen for task completion to clean up context (prevent memory leak)
     this.on('exit', (taskId: string, code: number | null) => {
       // Clean up context when:
@@ -64,16 +77,79 @@ export class AgentManager extends EventEmitter {
         // If task completed successfully, always clean up
         if (code === 0) {
           this.taskExecutionContext.delete(taskId);
+          this.cancelScheduledRestart(taskId);
           return;
         }
 
         // If task failed and hit max retries, clean up
         if (context.swapCount >= 2) {
           this.taskExecutionContext.delete(taskId);
+          this.cancelScheduledRestart(taskId);
         }
         // Otherwise keep context for potential restart
       }, 1000); // Delay to allow restart logic to run first
     });
+  }
+
+  /**
+   * Schedule a task restart after a rate limit resets
+   */
+  private scheduleRestartAfterRateLimit(taskId: string, resetTimeStr: string): void {
+    this.cancelScheduledRestart(taskId);
+
+    try {
+      const resetAt = parseResetTime(resetTimeStr);
+      const now = new Date();
+      const delay = resetAt.getTime() - now.getTime();
+
+      if (delay > 0) {
+        console.warn(`[AgentManager] Scheduling automatic restart for task ${taskId} in ${Math.round(delay / 1000 / 60)} minutes (at ${resetAt.toLocaleTimeString()})`);
+        
+        const timeout = setTimeout(() => {
+          console.warn(`[AgentManager] Rate limit reset time reached. Automatically restarting task ${taskId}...`);
+          this.scheduledRestarts.delete(taskId);
+          this.restartTask(taskId);
+        }, delay + 5000); // Add 5s buffer to ensure API is ready
+
+        this.scheduledRestarts.set(taskId, { timeout, fireAt: resetAt });
+        // Emit event to notify UI
+        this.emit('scheduled-restart-created', taskId, resetAt);
+      }
+    } catch (err) {
+      console.error(`[AgentManager] Failed to schedule restart for ${taskId}:`, err);
+    }
+  }
+
+  /**
+   * Get the scheduled restart time for a task (if any)
+   */
+  getScheduledRestartTime(taskId: string): Date | null {
+    const scheduled = this.scheduledRestarts.get(taskId);
+    return scheduled ? scheduled.fireAt : null;
+  }
+
+  /**
+   * Cancel any scheduled restart for a task (Public)
+   */
+  cancelScheduledRestart(taskId: string): void {
+    const scheduled = this.scheduledRestarts.get(taskId);
+    if (scheduled) {
+      clearTimeout(scheduled.timeout);
+      this.scheduledRestarts.delete(taskId);
+      // Emit event to update UI
+      this.emit('scheduled-restart-cancelled', taskId);
+    }
+  }
+
+  /**
+   * Trigger a scheduled restart immediately
+   */
+  runScheduledTaskNow(taskId: string): boolean {
+    if (this.scheduledRestarts.has(taskId)) {
+      this.cancelScheduledRestart(taskId);
+      return this.restartTask(taskId);
+    }
+    return false;
   }
 
   /**

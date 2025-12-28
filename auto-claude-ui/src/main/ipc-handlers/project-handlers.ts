@@ -2,7 +2,6 @@ import { ipcMain, app } from 'electron';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
-import { is } from '@electron-toolkit/utils';
 import { IPC_CHANNELS } from '../../shared/constants';
 import type {
   Project,
@@ -26,7 +25,10 @@ import { changelogService } from '../changelog-service';
 import { insightsService } from '../insights-service';
 import { titleGenerator } from '../title-generator';
 import type { BrowserWindow } from 'electron';
+
 import { getEffectiveSourcePath } from '../updater/path-resolver';
+
+import { getEffectiveSourcePath } from '../utils/path-resolver';
 
 // ============================================
 // Git Helper Functions
@@ -102,6 +104,39 @@ function detectMainBranch(projectPath: string): string | null {
 }
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+
+/**
+
+
+ * Auto-detect the auto-claude source path relative to the app location.
+ * Works across platforms (macOS, Windows, Linux) in both dev and production modes.
+ *
+ * @deprecated Use getEffectiveSourcePath from '../utils/path-resolver' instead
+ */
+const detectAutoBuildSourcePath = (): string | null => {
+  return getEffectiveSourcePath();
+};
+
+/**
+ * Get the configured auto-claude source path from settings, or auto-detect
+ */
+const getAutoBuildSourcePath = (): string | null => {
+  // First check if manually configured
+  if (existsSync(settingsPath)) {
+    try {
+      const content = readFileSync(settingsPath, 'utf-8');
+      const settings = JSON.parse(content);
+      if (settings.autoBuildPath && existsSync(settings.autoBuildPath)) {
+        return settings.autoBuildPath;
+      }
+    } catch {
+      // Fall through to auto-detect
+    }
+  }
+
+  // Auto-detect using centralized path resolver
+  return getEffectiveSourcePath();
+};
 
 /**
  * Configure all Python-dependent services with the managed Python path

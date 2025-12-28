@@ -42,9 +42,21 @@ export function registerInsightsHandlers(
         return;
       }
 
-      // Note: Python environment initialization should be handled by insightsService
-      // or added here with proper dependency injection if needed
-      insightsService.sendMessage(projectId, project.path, message, modelConfig);
+      try {
+        // Note: Python environment initialization should be handled by insightsService
+        // or added here with proper dependency injection if needed
+        await insightsService.sendMessage(projectId, project.path, message, modelConfig);
+      } catch (error) {
+        console.error('[Insights Handler] Send message failed:', error);
+        const mainWindow = getMainWindow();
+        if (mainWindow) {
+          mainWindow.webContents.send(
+            IPC_CHANNELS.INSIGHTS_ERROR,
+            projectId,
+            error instanceof Error ? error.message : 'Failed to send message'
+          );
+        }
+      }
     }
   );
 
@@ -265,7 +277,7 @@ export function registerInsightsHandlers(
   // Forward streaming chunks to renderer
   insightsService.on('stream-chunk', (projectId: string, chunk: unknown) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.INSIGHTS_STREAM_CHUNK, projectId, chunk);
     }
   });
@@ -273,7 +285,7 @@ export function registerInsightsHandlers(
   // Forward status updates to renderer
   insightsService.on('status', (projectId: string, status: unknown) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.INSIGHTS_STATUS, projectId, status);
     }
   });
@@ -281,7 +293,7 @@ export function registerInsightsHandlers(
   // Forward errors to renderer
   insightsService.on('error', (projectId: string, error: string) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.INSIGHTS_ERROR, projectId, error);
     }
   });
@@ -289,8 +301,16 @@ export function registerInsightsHandlers(
   // Forward SDK rate limit events to renderer
   insightsService.on('sdk-rate-limit', (rateLimitInfo: unknown) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_SDK_RATE_LIMIT, rateLimitInfo);
+    }
+  });
+
+  // Forward cost limit events to renderer
+  insightsService.on('cost-limit', (costLimitInfo: unknown) => {
+    const mainWindow = getMainWindow();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_COST_LIMIT, costLimitInfo);
     }
   });
 

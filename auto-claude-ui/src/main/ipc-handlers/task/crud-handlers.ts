@@ -7,6 +7,7 @@ import { projectStore } from '../../project-store';
 import { titleGenerator } from '../../title-generator';
 import { AgentManager } from '../../agent';
 import { findTaskAndProject } from './shared';
+import { validateProjectId, validateTaskId, validateOptionalString, withValidation } from '../../utils';
 
 /**
  * Register task CRUD (Create, Read, Update, Delete) handlers
@@ -17,12 +18,13 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
    */
   ipcMain.handle(
     IPC_CHANNELS.TASK_LIST,
-    async (_, projectId: string): Promise<IPCResult<Task[]>> => {
-      console.warn('[IPC] TASK_LIST called with projectId:', projectId);
-      const tasks = projectStore.getTasks(projectId);
+    withValidation(async (_, projectId: unknown): Promise<IPCResult<Task[]>> => {
+      const validProjectId = validateProjectId(projectId);
+      console.warn('[IPC] TASK_LIST called with projectId:', validProjectId);
+      const tasks = projectStore.getTasks(validProjectId);
       console.warn('[IPC] TASK_LIST returning', tasks.length, 'tasks');
       return { success: true, data: tasks };
-    }
+    })
   );
 
   /**
@@ -30,37 +32,41 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
    */
   ipcMain.handle(
     IPC_CHANNELS.TASK_CREATE,
-    async (
+    withValidation(async (
       _,
-      projectId: string,
-      title: string,
-      description: string,
+      projectId: unknown,
+      title: unknown,
+      description: unknown,
       metadata?: TaskMetadata
     ): Promise<IPCResult<Task>> => {
-      const project = projectStore.getProject(projectId);
+      const validProjectId = validateProjectId(projectId);
+      const validTitle = validateOptionalString(title, 'title') || '';
+      const validDescription = validateOptionalString(description, 'description') || '';
+
+      const project = projectStore.getProject(validProjectId);
       if (!project) {
         return { success: false, error: 'Project not found' };
       }
 
       // Auto-generate title if empty using Claude AI
-      let finalTitle = title;
-      if (!title || !title.trim()) {
+      let finalTitle = validTitle;
+      if (!validTitle || !validTitle.trim()) {
         console.warn('[TASK_CREATE] Title is empty, generating with Claude AI...');
         try {
-          const generatedTitle = await titleGenerator.generateTitle(description);
+          const generatedTitle = await titleGenerator.generateTitle(validDescription);
           if (generatedTitle) {
             finalTitle = generatedTitle;
             console.warn('[TASK_CREATE] Generated title:', finalTitle);
           } else {
             // Fallback: create title from first line of description
-            finalTitle = description.split('\n')[0].substring(0, 60);
+            finalTitle = validDescription.split('\n')[0].substring(0, 60);
             if (finalTitle.length === 60) finalTitle += '...';
             console.warn('[TASK_CREATE] AI generation failed, using fallback:', finalTitle);
           }
         } catch (err) {
           console.error('[TASK_CREATE] Title generation error:', err);
           // Fallback: create title from first line of description
-          finalTitle = description.split('\n')[0].substring(0, 60);
+          finalTitle = validDescription.split('\n')[0].substring(0, 60);
           if (finalTitle.length === 60) finalTitle += '...';
         }
       }
@@ -145,7 +151,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
       const now = new Date().toISOString();
       const implementationPlan = {
         feature: finalTitle,
-        description: description,
+        description: validDescription,
         created_at: now,
         updated_at: now,
         status: 'pending',
@@ -163,7 +169,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 
       // Create requirements.json with attached images
       const requirements: Record<string, unknown> = {
-        task_description: description,
+        task_description: validDescription,
         workflow_type: taskMetadata.category || 'feature'
       };
 
@@ -183,9 +189,9 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
       const task: Task = {
         id: specId,
         specId: specId,
-        projectId,
+        projectId: validProjectId,
         title: finalTitle,
-        description,
+        description: validDescription,
         status: 'backlog',
         subtasks: [],
         logs: [],
@@ -195,7 +201,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
       };
 
       return { success: true, data: task };
-    }
+    })
   );
 
   /**
@@ -203,18 +209,19 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
    */
   ipcMain.handle(
     IPC_CHANNELS.TASK_DELETE,
-    async (_, taskId: string): Promise<IPCResult> => {
+    withValidation(async (_, taskId: unknown): Promise<IPCResult> => {
+      const validTaskId = validateTaskId(taskId);
       const { rm } = await import('fs/promises');
 
       // Find task and project
-      const { task, project } = findTaskAndProject(taskId);
+      const { task, project } = findTaskAndProject(validTaskId);
 
       if (!task || !project) {
         return { success: false, error: 'Task or project not found' };
       }
 
       // Check if task is currently running
-      const isRunning = agentManager.isRunning(taskId);
+      const isRunning = agentManager.isRunning(validTaskId);
       if (isRunning) {
         return { success: false, error: 'Cannot delete a running task. Stop the task first.' };
       }
@@ -236,7 +243,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
           error: error instanceof Error ? error.message : 'Failed to delete task files'
         };
       }
-    }
+    })
   );
 
   /**
@@ -244,14 +251,18 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
    */
   ipcMain.handle(
     IPC_CHANNELS.TASK_UPDATE,
-    async (
+    withValidation(async (
       _,
-      taskId: string,
-      updates: { title?: string; description?: string; metadata?: Partial<TaskMetadata> }
+      taskId: unknown,
+      updates: { title?: unknown; description?: unknown; metadata?: Partial<TaskMetadata> }
     ): Promise<IPCResult<Task>> => {
       try {
+        const validTaskId = validateTaskId(taskId);
+        const validTitle = validateOptionalString(updates.title, 'title');
+        const validDescription = validateOptionalString(updates.description, 'description');
+
         // Find task and project
-        const { task, project } = findTaskAndProject(taskId);
+        const { task, project } = findTaskAndProject(validTaskId);
 
         if (!task || !project) {
           return { success: false, error: 'Task not found' };
@@ -265,10 +276,10 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
         }
 
         // Auto-generate title if empty
-        let finalTitle = updates.title;
-        if (updates.title !== undefined && !updates.title.trim()) {
+        let finalTitle = validTitle;
+        if (validTitle !== undefined && !validTitle.trim()) {
           // Get description to use for title generation
-          const descriptionToUse = updates.description ?? task.description;
+          const descriptionToUse = validDescription ?? task.description;
           console.warn('[TASK_UPDATE] Title is empty, generating with Claude AI...');
           try {
             const generatedTitle = await titleGenerator.generateTitle(descriptionToUse);
@@ -299,8 +310,8 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
             if (finalTitle !== undefined) {
               plan.feature = finalTitle;
             }
-            if (updates.description !== undefined) {
-              plan.description = updates.description;
+            if (validDescription !== undefined) {
+              plan.description = validDescription;
             }
             plan.updated_at = new Date().toISOString();
 
@@ -325,11 +336,11 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
             }
 
             // Update description (## Overview section content)
-            if (updates.description !== undefined) {
+            if (validDescription !== undefined) {
               // Replace content between ## Overview and the next ## section
               specContent = specContent.replace(
                 /(## Overview\n)([\s\S]*?)((?=\n## )|$)/,
-                `$1${updates.description}\n\n$3`
+                `$1${validDescription}\n\n$3`
               );
             }
 
@@ -393,8 +404,8 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
               const requirementsContent = readFileSync(requirementsPath, 'utf-8');
               const requirements = JSON.parse(requirementsContent);
 
-              if (updates.description !== undefined) {
-                requirements.task_description = updates.description;
+              if (validDescription !== undefined) {
+                requirements.task_description = validDescription;
               }
               if (updates.metadata.category) {
                 requirements.workflow_type = updates.metadata.category;
@@ -411,7 +422,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
         const updatedTask: Task = {
           ...task,
           title: finalTitle ?? task.title,
-          description: updates.description ?? task.description,
+          description: validDescription ?? task.description,
           metadata: updatedMetadata,
           updatedAt: new Date()
         };
@@ -423,6 +434,6 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
           error: error instanceof Error ? error.message : 'Unknown error'
         };
       }
-    }
+    })
   );
 }

@@ -17,6 +17,7 @@ This module has been refactored for better maintainability:
 Public API is exported via workspace/__init__.py for backward compatibility.
 """
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -382,8 +383,10 @@ def _try_smart_merge_inner(
             timeline_tracker = FileTimelineTracker(project_dir)
             timeline_tracker.capture_worktree_state(spec_name, worktree_path)
             debug(MODULE, "Captured worktree state for timeline tracking")
-        except Exception as e:
-            debug_warning(MODULE, f"Could not capture worktree state: {e}")
+        except (OSError, PermissionError) as e:
+            debug_warning(MODULE, f"File access error capturing worktree state: {e}")
+        except (ValueError, KeyError) as e:
+            debug_warning(MODULE, f"Data error in timeline tracker: {e}")
 
         # Initialize the orchestrator
         debug(
@@ -512,8 +515,8 @@ def _try_smart_merge_inner(
             },
         }
 
-    except Exception as e:
-        # If smart merge fails, fall back to git
+    except (OSError, PermissionError) as e:
+        # File access errors during merge
         import traceback
 
         print(muted(f"  Smart merge error: {e}"))
@@ -657,8 +660,10 @@ def _check_git_conflicts(project_dir: Path, spec_name: str) -> dict:
                     f for f in conflicting if not _is_auto_claude_file(f)
                 ]
 
-    except Exception as e:
-        print(muted(f"  Error checking git conflicts: {e}"))
+    except subprocess.CalledProcessError as e:
+        print(muted(f"  Git command failed checking conflicts: {e.stderr if e.stderr else e}"))
+    except (OSError, PermissionError) as e:
+        print(muted(f"  File access error checking conflicts: {e}"))
 
     return result
 
@@ -756,8 +761,10 @@ def _resolve_git_conflicts_with_ai(
                     )
                     resolved_files.append(file_path)
                     debug(MODULE, f"Copied new file: {file_path}")
-            except Exception as e:
+            except (OSError, PermissionError) as e:
                 debug_warning(MODULE, f"Could not copy new file {file_path}: {e}")
+            except (FileNotFoundError, IsADirectoryError) as e:
+                debug_warning(MODULE, f"File operation error for {file_path}: {e}")
 
     # Categorize conflicting files for processing
     files_needing_ai_merge: list[ParallelMergeTask] = []
@@ -828,8 +835,16 @@ def _resolve_git_conflicts_with_ai(
                     )
                     debug(MODULE, f"  {file_path}: needs AI merge")
 
-        except Exception as e:
-            print(error(f"    ✗ Failed to categorize {file_path}: {e}"))
+        except (OSError, PermissionError) as e:
+            print(error(f"    ✗ Failed to categorize {file_path}: File access error: {e}"))
+            remaining_conflicts.append(
+                {
+                    "path": file_path,
+                    "reason": f"File access error: {e}",
+                }
+            )
+        except (UnicodeDecodeError, ValueError) as e:
+            print(error(f"    ✗ Failed to categorize {file_path}: Data processing error: {e}"))
             remaining_conflicts.append(
                 {
                     "file": file_path,
@@ -864,8 +879,16 @@ def _resolve_git_conflicts_with_ai(
                         )
                     resolved_files.append(file_path)
                     print(success(f"    ✓ {file_path} (deleted)"))
-            except Exception as e:
-                print(error(f"    ✗ {file_path}: {e}"))
+            except subprocess.CalledProcessError as e:
+                print(error(f"    ✗ {file_path}: Git command failed: {e}"))
+                remaining_conflicts.append(
+                    {
+                        "path": file_path,
+                        "reason": f"Git error: {e}",
+                    }
+                )
+            except (OSError, PermissionError) as e:
+                print(error(f"    ✗ {file_path}: File access error: {e}"))
                 remaining_conflicts.append(
                     {
                         "file": file_path,
@@ -969,13 +992,23 @@ def _resolve_git_conflicts_with_ai(
                         ["git", "add", file_path], cwd=project_dir, capture_output=True
                     )
                     resolved_files.append(file_path)
-        except Exception as e:
+        except subprocess.CalledProcessError as e:
+            print(muted(f"    Warning: Git command failed for {file_path}: {e}"))
+        except (OSError, PermissionError, UnicodeDecodeError) as e:
             print(muted(f"    Warning: Could not process {file_path}: {e}"))
 
     # V2: Record merge completion in Evolution Tracker for future context
-    # TODO: _record_merge_completion not yet implemented - see line 141
-    # if resolved_files:
-    #     _record_merge_completion(project_dir, spec_name, resolved_files)
+    if resolved_files:
+        try:
+            _record_merge_completion(
+                project_dir=project_dir,
+                spec_name=spec_name,
+                resolved_files=resolved_files,
+                conflicting_files=conflicting_files,
+                stats=result.get("stats", {}),
+            )
+        except Exception as e:
+            debug_warning(MODULE, f"Failed to record merge completion: {e}")
 
     # Build result - partial success if some files failed but we got others
     result = {
@@ -1289,8 +1322,22 @@ async def _merge_file_with_ai_async(
                     error="AI returned empty response",
                 )
 
-        except Exception as e:
-            _merge_logger.error(f"Failed to merge {task.file_path}: {e}")
+        except asyncio.TimeoutError:
+            _merge_logger.error(f"AI merge timeout for {task.file_path}")
+            return ParallelMergeResult(
+                file_path=task.file_path,
+                success=False,
+                error="AI merge timeout",
+            )
+        except (OSError, PermissionError, UnicodeDecodeError) as e:
+            _merge_logger.error(f"File operation failed for {task.file_path}: {e}")
+            return ParallelMergeResult(
+                file_path=task.file_path,
+                success=False,
+                error=f"File operation error: {e}",
+            )
+        except (ValueError, KeyError) as e:
+            _merge_logger.error(f"Data processing error for {task.file_path}: {e}")
             return ParallelMergeResult(
                 file_path=task.file_path,
                 merged_content=None,
@@ -1354,3 +1401,220 @@ async def _run_parallel_merges(
     )
 
     return final_results
+
+
+def _record_merge_completion(
+    project_dir: Path,
+    spec_name: str,
+    resolved_files: list[str],
+    conflicting_files: list[str],
+    stats: dict,
+) -> None:
+    """
+    Record merge completion in spec memory for future context.
+
+    This tracks:
+    - Which files were merged
+    - The merge commit hash
+    - Conflicts that were resolved
+    - Merge statistics (AI-assisted, auto-merged, etc.)
+
+    The data is stored in specs/{spec-name}/memory/merge_history.json
+    and is available for future sessions to understand what was merged.
+
+    Args:
+        project_dir: The project directory
+        spec_name: Name of the spec
+        resolved_files: List of files successfully merged
+        conflicting_files: List of files that had conflicts
+        stats: Merge statistics dictionary
+    """
+    from datetime import datetime, timezone
+
+    debug(
+        MODULE,
+        "Recording merge completion",
+        spec_name=spec_name,
+        resolved_count=len(resolved_files),
+    )
+
+    # Determine spec directory location
+    # Specs can be in either auto-claude/specs/ or .auto-claude/specs/
+    spec_dir = None
+    for base in [project_dir / "auto-claude" / "specs", project_dir / ".auto-claude" / "specs"]:
+        candidate = base / spec_name
+        if candidate.exists():
+            spec_dir = candidate
+            break
+
+    if not spec_dir:
+        # Create in .auto-claude/specs/ if neither exists
+        spec_dir = project_dir / ".auto-claude" / "specs" / spec_name
+        spec_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ensure memory directory exists
+    memory_dir = spec_dir / "memory"
+    memory_dir.mkdir(exist_ok=True)
+
+    # Get current commit hash (the merge commit)
+    merge_commit = None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            merge_commit = result.stdout.strip()
+    except (subprocess.CalledProcessError, Exception):
+        # Catch all exceptions including mocked ones in tests
+        pass
+
+    # Load existing merge history
+    merge_history_file = memory_dir / "merge_history.json"
+    merge_history = {"merges": []}
+
+    if merge_history_file.exists():
+        try:
+            with open(merge_history_file) as f:
+                merge_history = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            debug_warning(MODULE, f"Could not load merge history: {e}")
+            merge_history = {"merges": []}
+
+    # Create merge record
+    merge_record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "spec_name": spec_name,
+        "merge_commit": merge_commit,
+        "files_merged": sorted(resolved_files),
+        "conflicting_files": sorted(conflicting_files),
+        "stats": {
+            "total_files": len(resolved_files),
+            "conflicts_resolved": stats.get("conflicts_resolved", 0),
+            "ai_assisted": stats.get("ai_assisted", 0),
+            "auto_merged": stats.get("auto_merged", 0),
+            "parallel_ai_merges": stats.get("parallel_ai_merges", 0),
+            "lock_files_excluded": stats.get("lock_files_excluded", 0),
+        },
+    }
+
+    # Add to history
+    if "merges" not in merge_history:
+        merge_history["merges"] = []
+    merge_history["merges"].append(merge_record)
+
+    # Keep only last 50 merges to avoid bloat
+    merge_history["merges"] = merge_history["merges"][-50:]
+
+    # Save updated history
+    try:
+        with open(merge_history_file, "w") as f:
+            json.dump(merge_history, f, indent=2)
+
+        debug_success(
+            MODULE,
+            f"Recorded merge completion in {merge_history_file}",
+            files_count=len(resolved_files),
+        )
+    except (OSError, PermissionError) as e:
+        debug_error(MODULE, f"Failed to save merge history: {e}")
+
+    # Also create a human-readable merge summary
+    _create_merge_summary_md(
+        memory_dir=memory_dir,
+        merge_record=merge_record,
+        spec_name=spec_name,
+    )
+
+
+def _create_merge_summary_md(
+    memory_dir: Path,
+    merge_record: dict,
+    spec_name: str,
+) -> None:
+    """
+    Create a human-readable merge summary in markdown format.
+
+    This provides a quick reference for what was merged, stored in
+    specs/{spec-name}/memory/last_merge.md
+
+    Args:
+        memory_dir: Path to the memory directory
+        merge_record: The merge record dictionary
+        spec_name: Name of the spec
+    """
+    summary_file = memory_dir / "last_merge.md"
+
+    stats = merge_record.get("stats", {})
+    files_merged = merge_record.get("files_merged", [])
+    conflicting_files = merge_record.get("conflicting_files", [])
+
+    merge_commit = merge_record.get('merge_commit')
+    commit_display = merge_commit[:12] if merge_commit else 'unknown'
+
+    content_lines = [
+        f"# Last Merge: {spec_name}",
+        "",
+        f"**Timestamp:** {merge_record.get('timestamp', 'unknown')}",
+        f"**Commit:** `{commit_display}`",
+        "",
+        "## Statistics",
+        "",
+        f"- Total files merged: {stats.get('total_files', 0)}",
+        f"- Conflicts resolved: {stats.get('conflicts_resolved', 0)}",
+        f"- AI-assisted merges: {stats.get('ai_assisted', 0)}",
+        f"- Auto-merged files: {stats.get('auto_merged', 0)}",
+        f"- Lock files excluded: {stats.get('lock_files_excluded', 0)}",
+        "",
+    ]
+
+    # Add conflicting files section
+    if conflicting_files:
+        content_lines.extend([
+            "## Conflicting Files (Resolved)",
+            "",
+        ])
+        for file_path in conflicting_files:
+            content_lines.append(f"- `{file_path}`")
+        content_lines.append("")
+
+    # Add merged files section
+    if files_merged:
+        # Group by directory for better readability
+        from collections import defaultdict
+        by_directory = defaultdict(list)
+
+        for file_path in files_merged:
+            if "/" in file_path:
+                directory = "/".join(file_path.split("/")[:-1])
+                by_directory[directory].append(file_path)
+            else:
+                by_directory["."].append(file_path)
+
+        content_lines.extend([
+            "## Files Merged",
+            "",
+        ])
+
+        # Show top-level summary
+        content_lines.append(f"**Total: {len(files_merged)} files**")
+        content_lines.append("")
+
+        # Show directories with counts
+        for directory in sorted(by_directory.keys()):
+            file_count = len(by_directory[directory])
+            content_lines.append(f"### {directory}/ ({file_count} files)")
+            content_lines.append("")
+            for file_path in sorted(by_directory[directory])[:10]:  # Limit to 10 per dir
+                content_lines.append(f"- `{file_path}`")
+            if file_count > 10:
+                content_lines.append(f"- ... and {file_count - 10} more")
+            content_lines.append("")
+
+    try:
+        summary_file.write_text("\n".join(content_lines), encoding="utf-8")
+        debug(MODULE, f"Created merge summary at {summary_file}")
+    except (OSError, PermissionError) as e:
+        debug_warning(MODULE, f"Could not write merge summary: {e}")

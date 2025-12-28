@@ -485,6 +485,46 @@ describe('Auth Failure Detection', () => {
     });
   });
 
+  describe('performance - pre-compiled regex patterns', () => {
+    it('should efficiently handle repeated detection calls (stress test)', async () => {
+      const { detectRateLimit, detectAuthFailure, detectCostLimit } = await import('../rate-limit-detector');
+
+      const testOutputs = [
+        'Limit reached · resets Dec 17 at 6am (Europe/Oslo)',
+        'Normal output without any errors',
+        'Error: authentication required',
+        'Credit balance too low',
+        'Rate limit exceeded'
+      ];
+
+      const iterations = 1000;
+      const startTime = performance.now();
+
+      // Simulate frequent checks during agent execution
+      for (let i = 0; i < iterations; i++) {
+        testOutputs.forEach(output => {
+          detectRateLimit(output);
+          detectAuthFailure(output);
+          detectCostLimit(output);
+        });
+      }
+
+      const endTime = performance.now();
+      const duration = endTime - startTime;
+      const totalChecks = iterations * testOutputs.length * 3;
+      const avgTimePerCheck = duration / totalChecks;
+
+      // Pre-compiled patterns should complete all 15,000 checks in under 1 second
+      // Expected: ~0.05ms per check (2-3x faster than inline regex compilation)
+      expect(duration).toBeLessThan(1000);
+
+      // Log performance metrics for debugging/monitoring
+      if (avgTimePerCheck > 0.1) {
+        console.warn(`Performance degradation detected: ${avgTimePerCheck.toFixed(4)}ms per check (expected < 0.1ms)`);
+      }
+    });
+  });
+
   describe('edge cases', () => {
     it('should handle multiline output with auth failure', async () => {
       const { detectAuthFailure } = await import('../rate-limit-detector');

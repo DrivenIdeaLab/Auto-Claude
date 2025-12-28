@@ -48,6 +48,7 @@ MODULE = "merge.conflict_analysis"
 def detect_conflicts(
     task_analyses: dict[str, FileAnalysis],
     rule_index: dict[tuple[ChangeType, ChangeType], CompatibilityRule],
+    file_contents: dict[str, tuple[str, str]] | None = None,
 ) -> list[ConflictRegion]:
     """
     Detect conflicts between multiple task changes to the same file.
@@ -55,6 +56,8 @@ def detect_conflicts(
     Args:
         task_analyses: Map of task_id -> FileAnalysis
         rule_index: Indexed compatibility rules for fast lookup
+        file_contents: Optional map of task_id -> (content_before, content_after)
+                      for semantic conflict detection
 
     Returns:
         List of detected conflict regions
@@ -113,7 +116,7 @@ def detect_conflicts(
             conflicts.append(conflict)
 
     # Also check for implicit conflicts (e.g., changes to related code)
-    implicit_conflicts = detect_implicit_conflicts(task_analyses)
+    implicit_conflicts = detect_implicit_conflicts(task_analyses, file_contents)
     if implicit_conflicts:
         debug_detailed(MODULE, f"Found {len(implicit_conflicts)} implicit conflicts")
     conflicts.extend(implicit_conflicts)
@@ -253,6 +256,7 @@ def ranges_overlap(ranges: list[tuple[int, int]]) -> bool:
 
 def detect_implicit_conflicts(
     task_analyses: dict[str, FileAnalysis],
+    file_contents: dict[str, tuple[str, str]] | None = None,
 ) -> list[ConflictRegion]:
     """
     Detect implicit conflicts not caught by location analysis.
@@ -261,27 +265,40 @@ def detect_implicit_conflicts(
     - Function rename + function call changes
     - Import removal + usage
     - Variable rename + references
+    - Type changes that break callers
 
     Args:
         task_analyses: Map of task_id -> FileAnalysis
+        file_contents: Optional map of task_id -> (content_before, content_after)
+                      If provided, enables advanced semantic conflict detection
 
     Returns:
         List of implicit conflict regions
-
-    Note:
-        These advanced checks are currently TODO.
-        The main location-based detection handles most cases.
     """
     conflicts = []
 
-    # Check for function rename + function call changes
-    # (If task A renames a function and task B calls the old name)
+    # Try to perform semantic conflict detection if file contents are available
+    if file_contents:
+        try:
+            from .semantic_conflict_detector import detect_semantic_conflicts
 
-    # Check for import removal + usage
-    # (If task A removes an import and task B uses it)
+            semantic_conflicts = detect_semantic_conflicts(task_analyses, file_contents)
+            conflicts.extend(semantic_conflicts)
 
-    # For now, these advanced checks are TODO
-    # The main location-based detection handles most cases
+            debug_detailed(
+                MODULE,
+                f"Semantic conflict detection found {len(semantic_conflicts)} conflicts"
+            )
+
+        except ImportError as e:
+            debug(MODULE, f"Semantic conflict detection not available: {e}")
+        except Exception as e:
+            debug(MODULE, f"Error in semantic conflict detection: {e}")
+    else:
+        debug(
+            MODULE,
+            "Semantic conflict detection skipped (file_contents not provided)"
+        )
 
     return conflicts
 

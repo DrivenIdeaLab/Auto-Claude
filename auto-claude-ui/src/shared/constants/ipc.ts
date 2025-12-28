@@ -95,6 +95,8 @@ export const IPC_CHANNELS = {
 
   // SDK/CLI rate limit event (for non-terminal Claude invocations)
   CLAUDE_SDK_RATE_LIMIT: 'claude:sdkRateLimit',
+  // Cost limit event (credit balance low)
+  CLAUDE_COST_LIMIT: 'claude:costLimit',
   // Retry a rate-limited operation with a different profile
   CLAUDE_RETRY_WITH_PROFILE: 'claude:retryWithProfile',
 
@@ -147,6 +149,7 @@ export const IPC_CHANNELS = {
   ENV_UPDATE: 'env:update',
   ENV_CHECK_CLAUDE_AUTH: 'env:checkClaudeAuth',
   ENV_INVOKE_CLAUDE_SETUP: 'env:invokeClaudeSetup',
+  ENV_VALIDATION_GET: 'env:validationGet',
 
   // Ideation operations
   IDEATION_GET: 'ideation:get',

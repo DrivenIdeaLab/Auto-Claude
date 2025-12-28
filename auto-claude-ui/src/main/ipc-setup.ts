@@ -10,6 +10,7 @@ import { AgentManager } from './agent';
 import { TerminalManager } from './terminal-manager';
 import { PythonEnvManager } from './python-env-manager';
 import { setupIpcHandlers as setupModularHandlers } from './ipc-handlers';
+import type { EnvValidationResult } from './env-validator';
 
 /**
  * Setup all IPC handlers
@@ -37,13 +38,15 @@ import { setupIpcHandlers as setupModularHandlers } from './ipc-handlers';
  * @param terminalManager - The terminal manager instance
  * @param getMainWindow - Function to get the main BrowserWindow
  * @param pythonEnvManager - The Python environment manager instance
+ * @param getValidationResult - Optional function to get environment validation results
  */
 export function setupIpcHandlers(
   agentManager: AgentManager,
   terminalManager: TerminalManager,
   getMainWindow: () => BrowserWindow | null,
-  pythonEnvManager: PythonEnvManager
+  pythonEnvManager: PythonEnvManager,
+  getValidationResult?: () => EnvValidationResult | null
 ): void {
   // Delegate to modular handler setup
-  setupModularHandlers(agentManager, terminalManager, getMainWindow, pythonEnvManager);
+  setupModularHandlers(agentManager, terminalManager, getMainWindow, pythonEnvManager, getValidationResult);
 }

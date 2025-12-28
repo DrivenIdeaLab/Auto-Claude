@@ -44,6 +44,28 @@ from .workspace_commands import (
 )
 
 
+def _check_python_version() -> None:
+    """Check Python version and warn if Graphiti features are unavailable."""
+    try:
+        from integrations.graphiti.config import (
+            get_graphiti_status,
+            get_python_version_message,
+            is_python_version_compatible,
+        )
+
+        # Only show warning if Graphiti is enabled but Python version is incompatible
+        if not is_python_version_compatible():
+            status = get_graphiti_status()
+            if os.environ.get("GRAPHITI_ENABLED", "").lower() in ("true", "1", "yes"):
+                # User tried to enable Graphiti but Python is too old
+                print(
+                    f"\n{icon(Icons.WARNING)} {get_python_version_message()}\n"
+                )
+    except ImportError:
+        # Graphiti module not available - this is fine, just skip the check
+        pass
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -244,6 +266,9 @@ def main() -> None:
     """Main CLI entry point."""
     # Set up environment first
     setup_environment()
+
+    # Check Python version and warn about limited features
+    _check_python_version()
 
     # Parse arguments
     args = parse_args()

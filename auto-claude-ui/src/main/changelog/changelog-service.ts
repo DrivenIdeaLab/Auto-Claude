@@ -2,7 +2,6 @@ import { EventEmitter } from 'events';
 import * as path from 'path';
 import * as os from 'os';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { app } from 'electron';
 import { AUTO_BUILD_PATHS, DEFAULT_CHANGELOG_PATH } from '../../shared/constants';
 import type {
   ChangelogTask,
@@ -28,6 +27,7 @@ import {
   getBranchDiffCommits
 } from './git-integration';
 import { findPythonCommand } from '../python-detector';
+import { getEffectiveSourcePath, validateAutoBuildSource } from '../utils/path-resolver';
 
 /**
  * Main changelog service - orchestrates all changelog operations
@@ -139,25 +139,25 @@ export class ChangelogService extends EventEmitter {
 
   /**
    * Get the auto-claude source path (detects automatically if not configured)
+   * Uses centralized path resolver for production compatibility
    */
   private getAutoBuildSourcePath(): string | null {
-    if (this.autoBuildSourcePath && existsSync(this.autoBuildSourcePath)) {
-      return this.autoBuildSourcePath;
-    }
-
-    const possiblePaths = [
-      path.resolve(__dirname, '..', '..', '..', 'auto-claude'),
-      path.resolve(app.getAppPath(), '..', 'auto-claude'),
-      path.resolve(process.cwd(), 'auto-claude')
-    ];
-
-    for (const p of possiblePaths) {
-      // Use requirements.txt as marker - it always exists in auto-claude source
-      if (existsSync(p) && existsSync(path.join(p, 'requirements.txt'))) {
-        return p;
+    // If manually configured, validate and use it
+    if (this.autoBuildSourcePath) {
+      if (validateAutoBuildSource(this.autoBuildSourcePath)) {
+        return this.autoBuildSourcePath;
       }
+      this.debug('Configured path invalid:', this.autoBuildSourcePath);
     }
-    return null;
+
+    // Use centralized path resolution (handles production + dev)
+    const detectedPath = getEffectiveSourcePath();
+
+    if (!detectedPath) {
+      this.debug('Failed to detect auto-claude source path');
+    }
+
+    return detectedPath;
   }
 
   /**

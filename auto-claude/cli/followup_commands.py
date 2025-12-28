@@ -7,8 +7,11 @@ CLI commands for adding follow-up tasks to completed specs.
 
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Ensure parent directory is in path for imports (before other imports)
 _PARENT_DIR = Path(__file__).parent.parent
@@ -147,7 +150,13 @@ def collect_followup_task(spec_dir: Path, max_retries: int = 3) -> str | None:
                 print(muted("  Check file permissions and try again."))
                 retry_count += 1
                 continue
-            except Exception as e:
+            except UnicodeDecodeError as e:
+                logger.warning(f"File encoding error reading {file_path_str}: {e}")
+                print_status(f"File encoding error: {e}", "error")
+                retry_count += 1
+                continue
+            except (OSError, IOError) as e:
+                logger.warning(f"I/O error reading {file_path_str}: {e}")
                 print_status(f"Error reading file: {e}", "error")
                 retry_count += 1
                 continue
@@ -365,11 +374,19 @@ def handle_followup_command(
         print("\n\nFollow-up planning paused.")
         print(f"To retry: python auto-claude/run.py --spec {spec_dir.name} --followup")
         sys.exit(0)
-    except Exception as e:
+    except (OSError, PermissionError) as e:
+        logger.error(f"File system error during follow-up planning: {e}")
         print()
-        print(error(f"{icon(Icons.ERROR)} Follow-up planning error: {e}"))
+        print(error(f"{icon(Icons.ERROR)} File system error: {e}"))
         if verbose:
             import traceback
-
+            traceback.print_exc()
+        sys.exit(1)
+    except (ValueError, json.JSONDecodeError) as e:
+        logger.error(f"Data processing error during follow-up planning: {e}")
+        print()
+        print(error(f"{icon(Icons.ERROR)} Data error: {e}"))
+        if verbose:
+            import traceback
             traceback.print_exc()
         sys.exit(1)

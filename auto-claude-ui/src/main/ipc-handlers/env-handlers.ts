@@ -8,13 +8,15 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { spawn } from 'child_process';
 import { projectStore } from '../project-store';
 import { parseEnvFile } from './utils';
+import type { EnvValidationResult } from '../env-validator';
 
 
 /**
  * Register all env-related IPC handlers
  */
 export function registerEnvHandlers(
-  _getMainWindow: () => BrowserWindow | null
+  _getMainWindow: () => BrowserWindow | null,
+  getValidationResult?: () => EnvValidationResult | null
 ): void {
   // ============================================
   // Environment Configuration Operations
@@ -501,6 +503,24 @@ ${existingVars['GRAPHITI_DB_PATH'] ? `GRAPHITI_DB_PATH=${existingVars['GRAPHITI_
           error: error instanceof Error ? error.message : 'Failed to invoke Claude setup'
         };
       }
+    }
+  );
+
+  // Get environment validation results
+  ipcMain.handle(
+    IPC_CHANNELS.ENV_VALIDATION_GET,
+    async (): Promise<IPCResult<EnvValidationResult>> => {
+      if (getValidationResult) {
+        const result = getValidationResult();
+        if (result) {
+          return { success: true, data: result };
+        }
+      }
+
+      return {
+        success: false,
+        error: 'Validation results not available'
+      };
     }
   );
 

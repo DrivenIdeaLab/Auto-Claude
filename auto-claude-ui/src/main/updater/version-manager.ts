@@ -6,6 +6,7 @@ import { app } from 'electron';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import type { UpdateMetadata } from './types';
+import { getAutoBuildSourcePath, getUpdateTargetPath } from '../utils/path-resolver';
 
 /**
  * Get the current app/framework version from package.json
@@ -30,19 +31,12 @@ export function getEffectiveVersion(): string {
 
   if (app.isPackaged) {
     // Production: check userData override path
-    metadataPaths.push(
-      path.join(app.getPath('userData'), 'auto-claude-source', '.update-metadata.json')
-    );
+    const updateTarget = getUpdateTargetPath();
+    metadataPaths.push(path.join(updateTarget, '.update-metadata.json'));
   } else {
-    // Development: check the actual source paths where updates are written
-    const possibleSourcePaths = [
-      path.join(app.getAppPath(), '..', 'auto-claude'),
-      path.join(app.getAppPath(), '..', '..', 'auto-claude'),
-      path.join(process.cwd(), 'auto-claude'),
-      path.join(process.cwd(), '..', 'auto-claude')
-    ];
-
-    for (const sourcePath of possibleSourcePaths) {
+    // Development: check the detected source path
+    const sourcePath = getAutoBuildSourcePath();
+    if (sourcePath) {
       metadataPaths.push(path.join(sourcePath, '.update-metadata.json'));
     }
   }

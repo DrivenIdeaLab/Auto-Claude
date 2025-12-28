@@ -10,16 +10,22 @@ interface RateLimitState {
   isSDKModalOpen: boolean;
   sdkRateLimitInfo: SDKRateLimitInfo | null;
 
+  // Cost limit modal
+  isCostLimitModalOpen: boolean;
+  costLimitInfo: { message: string; profileId?: string } | null;
+
   // Track if there's a pending rate limit (persists after modal is closed)
   // User can click the sidebar indicator to reopen
   hasPendingRateLimit: boolean;
-  pendingRateLimitType: 'terminal' | 'sdk' | null;
+  pendingRateLimitType: 'terminal' | 'sdk' | 'cost' | null;
 
   // Actions
   showRateLimitModal: (info: RateLimitInfo) => void;
   hideRateLimitModal: () => void;
   showSDKRateLimitModal: (info: SDKRateLimitInfo) => void;
   hideSDKRateLimitModal: () => void;
+  showCostLimitModal: (info: { message: string; profileId?: string }) => void;
+  hideCostLimitModal: () => void;
   reopenRateLimitModal: () => void;
   clearPendingRateLimit: () => void;
 }
@@ -29,6 +35,8 @@ export const useRateLimitStore = create<RateLimitState>((set, get) => ({
   rateLimitInfo: null,
   isSDKModalOpen: false,
   sdkRateLimitInfo: null,
+  isCostLimitModalOpen: false,
+  costLimitInfo: null,
   hasPendingRateLimit: false,
   pendingRateLimitType: null,
 
@@ -62,12 +70,27 @@ export const useRateLimitStore = create<RateLimitState>((set, get) => ({
     set({ isSDKModalOpen: false });
   },
 
+  showCostLimitModal: (info) => {
+    set({
+      isCostLimitModalOpen: true,
+      costLimitInfo: info,
+      hasPendingRateLimit: true,
+      pendingRateLimitType: 'cost'
+    });
+  },
+
+  hideCostLimitModal: () => {
+    set({ isCostLimitModalOpen: false });
+  },
+
   reopenRateLimitModal: () => {
     const state = get();
     if (state.pendingRateLimitType === 'terminal' && state.rateLimitInfo) {
       set({ isModalOpen: true });
     } else if (state.pendingRateLimitType === 'sdk' && state.sdkRateLimitInfo) {
       set({ isSDKModalOpen: true });
+    } else if (state.pendingRateLimitType === 'cost' && state.costLimitInfo) {
+      set({ isCostLimitModalOpen: true });
     }
   },
 
@@ -76,7 +99,8 @@ export const useRateLimitStore = create<RateLimitState>((set, get) => ({
       hasPendingRateLimit: false,
       pendingRateLimitType: null,
       rateLimitInfo: null,
-      sdkRateLimitInfo: null
+      sdkRateLimitInfo: null,
+      costLimitInfo: null
     });
   },
 }));

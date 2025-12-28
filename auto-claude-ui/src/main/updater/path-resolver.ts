@@ -1,70 +1,45 @@
 /**
  * Path resolution utilities for Auto Claude updater
+ *
+ * DEPRECATED: This file is maintained for backwards compatibility only.
+ * New code should use '../utils/path-resolver.ts' instead.
  */
 
-import { existsSync } from 'fs';
-import path from 'path';
-import { app } from 'electron';
+import {
+  getAutoBuildSourcePath,
+  getUpdateCachePath as utilGetUpdateCachePath,
+  getEffectiveSourcePath as utilGetEffectiveSourcePath,
+  getUpdateTargetPath as utilGetUpdateTargetPath
+} from '../utils/path-resolver';
 
 /**
  * Get the path to the bundled auto-claude source
+ * @deprecated Use getAutoBuildSourcePath from '../utils/path-resolver' instead
  */
-export function getBundledSourcePath(): string {
-  // In production, use app resources
-  // In development, use the repo's auto-claude folder
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'auto-claude');
-  }
-
-  // Development mode - look for auto-claude in various locations
-  const possiblePaths = [
-    path.join(app.getAppPath(), '..', 'auto-claude'),
-    path.join(app.getAppPath(), '..', '..', 'auto-claude'),
-    path.join(process.cwd(), 'auto-claude'),
-    path.join(process.cwd(), '..', 'auto-claude')
-  ];
-
-  for (const p of possiblePaths) {
-    if (existsSync(p)) {
-      return p;
-    }
-  }
-
-  // Fallback
-  return path.join(app.getAppPath(), '..', 'auto-claude');
+export function getBundledSourcePath(): string | null {
+  return getAutoBuildSourcePath();
 }
 
 /**
  * Get the path for storing downloaded updates
+ * @deprecated Use getUpdateCachePath from '../utils/path-resolver' instead
  */
 export function getUpdateCachePath(): string {
-  return path.join(app.getPath('userData'), 'auto-claude-updates');
+  return utilGetUpdateCachePath();
 }
 
 /**
  * Get the effective source path (considers override from updates)
+ * @deprecated Use getEffectiveSourcePath from '../utils/path-resolver' instead
  */
-export function getEffectiveSourcePath(): string {
-  if (app.isPackaged) {
-    // Check for user-updated source first
-    const overridePath = path.join(app.getPath('userData'), 'auto-claude-source');
-    if (existsSync(overridePath)) {
-      return overridePath;
-    }
-  }
-
-  return getBundledSourcePath();
+export function getEffectiveSourcePath(): string | null {
+  return utilGetEffectiveSourcePath();
 }
 
 /**
  * Get the path where updates should be installed
+ * @deprecated Use getUpdateTargetPath from '../utils/path-resolver' instead
  */
 export function getUpdateTargetPath(): string {
-  if (app.isPackaged) {
-    // For packaged apps, store in userData as a source override
-    return path.join(app.getPath('userData'), 'auto-claude-source');
-  } else {
-    // In development, update the actual source
-    return getBundledSourcePath();
-  }
+  return utilGetUpdateTargetPath();
 }

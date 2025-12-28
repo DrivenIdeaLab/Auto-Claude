@@ -42,6 +42,10 @@ export interface InsightsAPI {
   onInsightsError: (
     callback: (projectId: string, error: string) => void
   ) => IpcListenerCleanup;
+  
+  onCostLimit: (
+    callback: (info: any) => void
+  ) => IpcListenerCleanup;
 }
 
 /**
@@ -98,5 +102,10 @@ export const createInsightsAPI = (): InsightsAPI => ({
   onInsightsError: (
     callback: (projectId: string, error: string) => void
   ): IpcListenerCleanup =>
-    createIpcListener(IPC_CHANNELS.INSIGHTS_ERROR, callback)
+    createIpcListener(IPC_CHANNELS.INSIGHTS_ERROR, callback),
+
+  onCostLimit: (
+    callback: (info: any) => void
+  ): IpcListenerCleanup =>
+    createIpcListener(IPC_CHANNELS.CLAUDE_COST_LIMIT, callback)
 });

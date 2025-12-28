@@ -150,3 +150,21 @@ export interface AutoBuildSourceUpdateProgress {
   /** New version after successful update - used to refresh UI */
   newVersion?: string;
 }
+
+// Environment validation types
+export type ValidationSeverity = 'critical' | 'warning' | 'info';
+
+export interface ValidationIssue {
+  severity: ValidationSeverity;
+  component: string;
+  message: string;
+  details?: string;
+  featureImpact?: string;
+}
+
+export interface EnvValidationResult {
+  canStart: boolean;
+  issues: ValidationIssue[];
+  degradedFeatures: string[];
+  unavailableFeatures: string[];
+}

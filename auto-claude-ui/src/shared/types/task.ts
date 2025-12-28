@@ -226,6 +226,9 @@ export interface TaskMetadata {
   // Archive status
   archivedAt?: string;  // ISO date when task was archived
   archivedInVersion?: string;  // Version in which task was archived (from changelog)
+
+  // Approval workflow
+  approval?: import('../constants/approval').ApprovalRequest;
 }
 
 export interface Task {

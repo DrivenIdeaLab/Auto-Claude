@@ -105,17 +105,20 @@ class ConflictDetector:
     def detect_conflicts(
         self,
         task_analyses: dict[str, FileAnalysis],
+        file_contents: dict[str, tuple[str, str]] | None = None,
     ) -> list[ConflictRegion]:
         """
         Detect conflicts between multiple task changes to the same file.
 
         Args:
             task_analyses: Map of task_id -> FileAnalysis
+            file_contents: Optional map of task_id -> (content_before, content_after)
+                          for semantic conflict detection
 
         Returns:
             List of detected conflict regions
         """
-        conflicts = detect_conflicts(task_analyses, self._rule_index)
+        conflicts = detect_conflicts(task_analyses, self._rule_index, file_contents)
 
         # Summary logging
         auto_mergeable = sum(1 for c in conflicts if c.can_auto_merge)

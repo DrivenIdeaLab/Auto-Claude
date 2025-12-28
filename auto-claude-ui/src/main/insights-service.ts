@@ -51,6 +51,9 @@ export class InsightsService extends EventEmitter {
     this.executor.on('sdk-rate-limit', (info) => {
       this.emit('sdk-rate-limit', info);
     });
+    this.executor.on('cost-limit', (info) => {
+      this.emit('cost-limit', info);
+    });
   }
 
   /**

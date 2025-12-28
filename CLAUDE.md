@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Auto Claude is a multi-agent autonomous coding framework that builds software through coordinated AI agent sessions. It uses the Claude Code SDK to run agents in isolated workspaces with security controls.
 
+## Python Version Requirements
+
+- **Python 3.10-3.11**: Core features (spec creation, implementation, QA) work fully
+- **Python 3.12+**: Required for Graphiti Memory Layer (recommended for best experience)
+
+On Python 3.10-3.11, Auto Claude will automatically disable Graphiti features and use file-based memory only.
+
 ## Commands
 
 ### Setup

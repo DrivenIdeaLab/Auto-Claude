@@ -30,14 +30,14 @@ export function registerAgenteventsHandlers(
 
   agentManager.on('log', (taskId: string, log: string) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.TASK_LOG, taskId, log);
     }
   });
 
   agentManager.on('error', (taskId: string, error: string) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.TASK_ERROR, taskId, error);
     }
   });
@@ -45,7 +45,7 @@ export function registerAgenteventsHandlers(
   // Handle SDK rate limit events from agent manager
   agentManager.on('sdk-rate-limit', (rateLimitInfo: SDKRateLimitInfo) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_SDK_RATE_LIMIT, rateLimitInfo);
     }
   });
@@ -53,14 +53,14 @@ export function registerAgenteventsHandlers(
   // Handle SDK rate limit events from title generator
   titleGenerator.on('sdk-rate-limit', (rateLimitInfo: SDKRateLimitInfo) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_SDK_RATE_LIMIT, rateLimitInfo);
     }
   });
 
   agentManager.on('exit', (taskId: string, code: number | null, processType: ProcessType) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       // Stop file watcher
       fileWatcher.unwatch(taskId);
 
@@ -158,7 +158,7 @@ export function registerAgenteventsHandlers(
 
   agentManager.on('execution-progress', (taskId: string, progress: ExecutionProgressData) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.TASK_EXECUTION_PROGRESS, taskId, progress);
 
       // Auto-move task to AI Review when entering qa_review phase
@@ -178,14 +178,14 @@ export function registerAgenteventsHandlers(
 
   fileWatcher.on('progress', (taskId: string, plan: ImplementationPlan) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.TASK_PROGRESS, taskId, plan);
     }
   });
 
   fileWatcher.on('error', (taskId: string, error: string) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.TASK_ERROR, taskId, error);
     }
   });

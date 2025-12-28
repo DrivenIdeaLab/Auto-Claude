@@ -14,7 +14,10 @@ import { TaskWarnings } from './TaskWarnings';
 import { TaskSubtasks } from './TaskSubtasks';
 import { TaskLogs } from './TaskLogs';
 import { TaskReview } from './TaskReview';
+import { ApprovalControls } from '../ApprovalControls';
+import { ScheduledRestart } from './ScheduledRestart';
 import type { Task } from '../../../shared/types';
+import type { ApprovalAction } from '../../../shared/constants/approval';
 
 interface TaskDetailPanelProps {
   task: Task;
@@ -34,6 +37,16 @@ export function TaskDetailPanel({ task, onClose }: TaskDetailPanelProps) {
     }
   };
 
+  const handleRunScheduledNow = async () => {
+    await window.electronAPI.runScheduledTaskNow(task.id);
+    state.setScheduledRestart(null);
+  };
+
+  const handleCancelScheduledRestart = async () => {
+    await window.electronAPI.cancelScheduledRestart(task.id);
+    state.setScheduledRestart(null);
+  };
+
   const handleRecover = async () => {
     state.setIsRecovering(true);
     const result = await recoverStuckTask(task.id, { autoRestart: true });
@@ -42,6 +55,12 @@ export function TaskDetailPanel({ task, onClose }: TaskDetailPanelProps) {
       state.setHasCheckedRunning(false);
     }
     state.setIsRecovering(false);
+  };
+
+  const handleApprovalDecision = async (action: ApprovalAction, comment?: string) => {
+    await window.electronAPI.submitApproval(task.id, task.projectId, action, comment);
+    // Refresh task to show updated status
+    // In a real app, we'd rely on the task update event, but we can trigger a refresh here if needed
   };
 
   const handleReject = async () => {
@@ -168,6 +187,16 @@ export function TaskDetailPanel({ task, onClose }: TaskDetailPanelProps) {
                   onResume={handleStartStop}
                 />
 
+                {/* Scheduled Restart Info */}
+                {state.scheduledRestart && state.scheduledRestart.fireAt && (
+                  <ScheduledRestart
+                    taskId={task.id}
+                    fireAt={state.scheduledRestart.fireAt}
+                    onRunNow={handleRunScheduledNow}
+                    onCancel={handleCancelScheduledRestart}
+                  />
+                )}
+
                 {/* Progress */}
                 <TaskProgress
                   task={task}
@@ -179,6 +208,16 @@ export function TaskDetailPanel({ task, onClose }: TaskDetailPanelProps) {
 
                 {/* Metadata */}
                 <TaskMetadata task={task} />
+
+                {/* Approval Workflow */}
+                {task.metadata?.approval && (
+                  <ApprovalControls
+                    taskId={task.id}
+                    projectId={task.projectId}
+                    approvalData={task.metadata.approval}
+                    onDecision={handleApprovalDecision}
+                  />
+                )}
 
                 {/* Human Review Section */}
                 {state.needsReview && (

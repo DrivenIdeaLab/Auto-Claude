@@ -204,6 +204,7 @@ export function registerRoadmapHandlers(
 
   ipcMain.on(
     IPC_CHANNELS.ROADMAP_GENERATE,
+
     (_, projectId: string, enableCompetitorAnalysis?: boolean, refreshCompetitorAnalysis?: boolean) => {
       // Get feature settings for roadmap
       const featureSettings = getFeatureSettings();
@@ -212,6 +213,8 @@ export function registerRoadmapHandlers(
         thinkingLevel: featureSettings.thinkingLevel
       };
 
+
+    async (_, projectId: string, enableCompetitorAnalysis?: boolean, refreshCompetitorAnalysis?: boolean) => {
       debugLog('[Roadmap Handler] Generate request:', {
         projectId,
         enableCompetitorAnalysis,
@@ -239,6 +242,7 @@ export function registerRoadmapHandlers(
         config
       });
 
+
       // Start roadmap generation via agent manager
       agentManager.startRoadmapGeneration(
         projectId,
@@ -249,21 +253,40 @@ export function registerRoadmapHandlers(
         config
       );
 
-      // Send initial progress
-      mainWindow.webContents.send(
-        IPC_CHANNELS.ROADMAP_PROGRESS,
-        projectId,
-        {
-          phase: 'analyzing',
-          progress: 10,
-          message: 'Analyzing project structure...'
-        } as RoadmapGenerationStatus
-      );
+      try {
+        // Start roadmap generation via agent manager
+        await agentManager.startRoadmapGeneration(
+          projectId,
+          project.path,
+          false, // refresh (not a refresh operation)
+          enableCompetitorAnalysis ?? false,
+          refreshCompetitorAnalysis ?? false
+        );
+
+        // Send initial progress
+        mainWindow.webContents.send(
+          IPC_CHANNELS.ROADMAP_PROGRESS,
+          projectId,
+          {
+            phase: 'analyzing',
+            progress: 10,
+            message: 'Analyzing project structure...'
+          } as RoadmapGenerationStatus
+        );
+      } catch (error) {
+        debugError('[Roadmap Handler] Generation failed:', error);
+        mainWindow.webContents.send(
+          IPC_CHANNELS.ROADMAP_ERROR,
+          projectId,
+          error instanceof Error ? error.message : 'Failed to start roadmap generation'
+        );
+      }
     }
   );
 
   ipcMain.on(
     IPC_CHANNELS.ROADMAP_REFRESH,
+
     (_, projectId: string, enableCompetitorAnalysis?: boolean, refreshCompetitorAnalysis?: boolean) => {
       // Get feature settings for roadmap
       const featureSettings = getFeatureSettings();
@@ -272,6 +295,8 @@ export function registerRoadmapHandlers(
         thinkingLevel: featureSettings.thinkingLevel
       };
 
+
+    async (_, projectId: string, enableCompetitorAnalysis?: boolean, refreshCompetitorAnalysis?: boolean) => {
       debugLog('[Roadmap Handler] Refresh request:', {
         projectId,
         enableCompetitorAnalysis,
@@ -292,6 +317,7 @@ export function registerRoadmapHandlers(
         return;
       }
 
+
       // Start roadmap regeneration with refresh flag
       agentManager.startRoadmapGeneration(
         projectId,
@@ -302,16 +328,34 @@ export function registerRoadmapHandlers(
         config
       );
 
-      // Send initial progress
-      mainWindow.webContents.send(
-        IPC_CHANNELS.ROADMAP_PROGRESS,
-        projectId,
-        {
-          phase: 'analyzing',
-          progress: 10,
-          message: 'Refreshing roadmap...'
-        } as RoadmapGenerationStatus
-      );
+      try {
+        // Start roadmap regeneration with refresh flag
+        await agentManager.startRoadmapGeneration(
+          projectId,
+          project.path,
+          true, // refresh (this is a refresh operation)
+          enableCompetitorAnalysis ?? false,
+          refreshCompetitorAnalysis ?? false
+        );
+
+        // Send initial progress
+        mainWindow.webContents.send(
+          IPC_CHANNELS.ROADMAP_PROGRESS,
+          projectId,
+          {
+            phase: 'analyzing',
+            progress: 10,
+            message: 'Refreshing roadmap...'
+          } as RoadmapGenerationStatus
+        );
+      } catch (error) {
+        debugError('[Roadmap Handler] Refresh failed:', error);
+        mainWindow.webContents.send(
+          IPC_CHANNELS.ROADMAP_ERROR,
+          projectId,
+          error instanceof Error ? error.message : 'Failed to start roadmap refresh'
+        );
+      }
     }
   );
 
@@ -602,21 +646,21 @@ ${(feature.acceptance_criteria || []).map((c: string) => `- [ ] ${c}`).join('\n'
 
   agentManager.on('roadmap-progress', (projectId: string, status: RoadmapGenerationStatus) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.ROADMAP_PROGRESS, projectId, status);
     }
   });
 
   agentManager.on('roadmap-complete', (projectId: string, roadmap: Roadmap) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.ROADMAP_COMPLETE, projectId, roadmap);
     }
   });
 
   agentManager.on('roadmap-error', (projectId: string, error: string) => {
     const mainWindow = getMainWindow();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.ROADMAP_ERROR, projectId, error);
     }
   });

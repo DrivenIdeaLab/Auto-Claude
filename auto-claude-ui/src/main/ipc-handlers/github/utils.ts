@@ -80,6 +80,8 @@ export function normalizeRepoReference(repo: string): string {
   return normalized.trim();
 }
 
+import { robustFetch } from '../../utils/rate-limited-fetch';
+
 /**
  * Make a request to the GitHub API
  */
@@ -92,13 +94,18 @@ export async function githubFetch(
     ? endpoint
     : `https://api.github.com${endpoint}`;
 
-  const response = await fetch(url, {
+  const response = await robustFetch(url, {
     ...options,
     headers: {
       'Accept': 'application/vnd.github+json',
       'Authorization': `Bearer ${token}`,
       'User-Agent': 'Auto-Claude-UI',
       ...options.headers
+    },
+    // GitHub-specific retry config
+    retry: {
+      maxRetries: 3,
+      retryOnStatus: [403, 429, 500, 502, 503, 504] // 403 can be rate limit (secondary)
     }
   });
 

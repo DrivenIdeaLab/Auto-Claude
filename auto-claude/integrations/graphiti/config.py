@@ -7,6 +7,10 @@ Follows the same patterns as linear_config.py for consistency.
 
 Uses LadybugDB as the embedded graph database (no Docker required, requires Python 3.12+).
 
+Python Version Requirements:
+- Python 3.10-3.11: Graphiti features unavailable (graceful fallback to file-based memory)
+- Python 3.12+: Full Graphiti support with LadybugDB
+
 Multi-Provider Support (V2):
 - LLM Providers: OpenAI, Anthropic, Azure OpenAI, Ollama, Google AI
 - Embedder Providers: OpenAI, Voyage AI, Azure OpenAI, Ollama, Google AI
@@ -57,6 +61,7 @@ Environment Variables:
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -522,14 +527,49 @@ class GraphitiState:
         }
 
 
+def is_python_version_compatible() -> bool:
+    """
+    Check if the current Python version supports Graphiti.
+
+    Graphiti requires Python 3.12+ due to real_ladybug dependency.
+
+    Returns:
+        True if Python 3.12+, False otherwise
+    """
+    return sys.version_info >= (3, 12)
+
+
+def get_python_version_message() -> str:
+    """
+    Get a user-friendly message about Python version compatibility.
+
+    Returns:
+        Message string explaining version requirements
+    """
+    current = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    if is_python_version_compatible():
+        return f"Python {current} - Graphiti Memory Layer available"
+    else:
+        return (
+            f"Python {current} detected. Graphiti Memory Layer requires Python 3.12+.\n"
+            f"Auto Claude will use file-based memory only.\n"
+            f"Upgrade Python for full memory features: https://www.python.org/downloads/"
+        )
+
+
 def is_graphiti_enabled() -> bool:
     """
     Quick check if Graphiti integration is available.
 
     Returns True if:
+    - Python version is 3.12+
     - GRAPHITI_ENABLED is set to true/1/yes
     - Required provider credentials are configured
     """
+    # Check Python version first
+    if not is_python_version_compatible():
+        return False
+
     config = GraphitiConfig.from_env()
     return config.is_valid()
 
@@ -542,6 +582,8 @@ def get_graphiti_status() -> dict:
         Dict with status information:
             - enabled: bool
             - available: bool (has required dependencies)
+            - python_compatible: bool (Python 3.12+)
+            - python_version: str
             - database: str
             - db_path: str
             - llm_provider: str
@@ -550,10 +592,14 @@ def get_graphiti_status() -> dict:
             - errors: list (validation errors if any)
     """
     config = GraphitiConfig.from_env()
+    python_compatible = is_python_version_compatible()
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
     status = {
         "enabled": config.enabled,
         "available": False,
+        "python_compatible": python_compatible,
+        "python_version": python_version,
         "database": config.database,
         "db_path": config.db_path,
         "llm_provider": config.llm_provider,
@@ -561,6 +607,14 @@ def get_graphiti_status() -> dict:
         "reason": "",
         "errors": [],
     }
+
+    # Check Python version first
+    if not python_compatible:
+        status["reason"] = (
+            f"Python {python_version} detected. Graphiti requires Python 3.12+ "
+            f"(real_ladybug dependency). Using file-based memory only."
+        )
+        return status
 
     if not config.enabled:
         status["reason"] = "GRAPHITI_ENABLED not set to true"

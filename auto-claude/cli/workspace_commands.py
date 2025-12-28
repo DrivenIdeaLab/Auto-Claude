@@ -5,9 +5,12 @@ Workspace Commands
 CLI commands for workspace management (merge, review, discard, list, cleanup)
 """
 
+import logging
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Ensure parent directory is in path for imports (before other imports)
 _PARENT_DIR = Path(__file__).parent.parent
@@ -239,7 +242,9 @@ def _generate_and_save_commit_message(project_dir: Path, spec_name: str) -> None
                 files_changed = [
                     f.strip() for f in result.stdout.strip().split("\n") if f.strip()
                 ]
-        except Exception as e:
+        except subprocess.CalledProcessError as e:
+            debug_warning(MODULE, f"Git diff command failed: {e}")
+        except (OSError, UnicodeDecodeError) as e:
             debug_warning(MODULE, f"Could not get diff summary: {e}")
 
         # Generate commit message
@@ -270,8 +275,10 @@ def _generate_and_save_commit_message(project_dir: Path, spec_name: str) -> None
 
     except ImportError:
         debug_warning(MODULE, "commit_message module not available")
-    except Exception as e:
-        debug_warning(MODULE, f"Failed to generate commit message: {e}")
+    except (OSError, PermissionError) as e:
+        debug_warning(MODULE, f"File access error generating commit message: {e}")
+    except (ValueError, TypeError) as e:
+        debug_warning(MODULE, f"Data error generating commit message: {e}")
 
 
 def handle_review_command(project_dir: Path, spec_name: str) -> None:
@@ -505,8 +512,12 @@ def _check_git_merge_conflicts(project_dir: Path, spec_name: str) -> dict:
         else:
             debug_success(MODULE, "Git merge-tree: no conflicts detected")
 
-    except Exception as e:
-        debug_error(MODULE, f"Error checking git conflicts: {e}")
+    except subprocess.CalledProcessError as e:
+        debug_error(MODULE, f"Git command failed checking conflicts: {e}")
+        import traceback
+        traceback.print_exc()
+    except (OSError, UnicodeDecodeError) as e:
+        debug_error(MODULE, f"File system error checking conflicts: {e}")
         import traceback
 
         debug_verbose(MODULE, "Exception traceback", traceback=traceback.format_exc())
@@ -720,8 +731,13 @@ def handle_merge_preview_command(
 
         return result
 
-    except Exception as e:
-        debug_error(MODULE, "Merge preview failed", error=str(e))
+    except subprocess.CalledProcessError as e:
+        debug_error(MODULE, "Git command failed in merge preview", error=str(e))
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+    except (OSError, PermissionError, UnicodeDecodeError) as e:
+        debug_error(MODULE, "File system error in merge preview", error=str(e))
         import traceback
 
         debug_verbose(MODULE, "Exception traceback", traceback=traceback.format_exc())

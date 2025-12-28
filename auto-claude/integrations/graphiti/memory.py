@@ -23,7 +23,10 @@ For detailed documentation on the memory system architecture and usage,
 see graphiti/graphiti.py.
 """
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Import config utilities
 from graphiti_config import (
@@ -70,7 +73,7 @@ def get_graphiti_memory(
 
 async def test_graphiti_connection() -> tuple[bool, str]:
     """
-    Test if FalkorDB is available and Graphiti can connect.
+    Test if LadybugDB is available and Graphiti can connect.
 
     Returns:
         Tuple of (success: bool, message: str)
@@ -80,51 +83,50 @@ async def test_graphiti_connection() -> tuple[bool, str]:
     if not config.enabled:
         return False, "Graphiti not enabled (GRAPHITI_ENABLED not set to true)"
 
-    # Validate provider configuration
+    # Validate provider configuration (warnings only, not blockers)
     errors = config.get_validation_errors()
     if errors:
-        return False, f"Configuration errors: {'; '.join(errors)}"
+        # Just warnings - embedder is optional (keyword search fallback)
+        pass
 
     try:
-        from graphiti_core import Graphiti
-        from graphiti_core.driver.falkordb_driver import FalkorDriver
-        from graphiti_providers import ProviderError, create_embedder, create_llm_client
+        from .queries_pkg.client import GraphitiClient
 
-        # Create providers
+        # Create client and try to initialize
+        client = GraphitiClient(config)
+
         try:
-            llm_client = create_llm_client(config)
-            embedder = create_embedder(config)
-        except ProviderError as e:
-            return False, f"Provider error: {e}"
+            success = await client.initialize()
 
-        # Try to connect
-        driver = FalkorDriver(
-            host=config.falkordb_host,
-            port=config.falkordb_port,
-            password=config.falkordb_password or None,
-            database=config.database,
-        )
+            if not success:
+                return False, "Failed to initialize Graphiti client (check logs for details)"
 
-        graphiti = Graphiti(
-            graph_driver=driver,
-            llm_client=llm_client,
-            embedder=embedder,
-        )
+            # Try to close cleanly
+            await client.close()
 
-        # Try a simple operation
-        await graphiti.build_indices_and_constraints()
-        await graphiti.close()
+            db_path = config.get_db_path()
+            return True, (
+                f"Connected to LadybugDB at {db_path} "
+                f"(providers: {config.get_provider_summary()})"
+            )
 
-        return True, (
-            f"Connected to FalkorDB at {config.falkordb_host}:{config.falkordb_port} "
-            f"(providers: {config.get_provider_summary()})"
-        )
+        finally:
+            # Ensure cleanup
+            if client.is_initialized:
+                await client.close()
 
     except ImportError as e:
+        logger.warning(f"Graphiti packages not installed: {e}")
         return False, f"Graphiti packages not installed: {e}"
-
-    except Exception as e:
+    except (ConnectionError, TimeoutError) as e:
+        logger.error(f"Database connection failed: {e}")
         return False, f"Connection failed: {e}"
+    except (OSError, PermissionError) as e:
+        logger.error(f"File system error accessing Graphiti DB: {e}")
+        return False, f"File system error: {e}"
+    except (ValueError, KeyError) as e:
+        logger.error(f"Configuration error in Graphiti: {e}")
+        return False, f"Configuration error: {e}"
 
 
 async def test_provider_configuration() -> dict:

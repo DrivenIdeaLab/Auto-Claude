@@ -9,6 +9,14 @@ import { fileWatcher } from '../../file-watcher';
 import { findTaskAndProject } from './shared';
 import { checkGitStatus } from '../../project-initializer';
 import { getClaudeProfileManager } from '../../claude-profile-manager';
+import {
+  validateTaskId,
+  validateBoolean,
+  validateOptionalString,
+  validateOptionalBoolean,
+  validateEnum,
+  withValidation
+} from '../../utils';
 
 /**
  * Register task execution handlers (start, stop, review, status management, recovery)
@@ -22,25 +30,75 @@ export function registerTaskExecutionHandlers(
    */
   ipcMain.on(
     IPC_CHANNELS.TASK_START,
-    (_, taskId: string, _options?: TaskStartOptions) => {
-      console.warn('[TASK_START] Received request for taskId:', taskId);
+    (_, taskId: unknown, _options?: TaskStartOptions) => {
       const mainWindow = getMainWindow();
       if (!mainWindow) {
         console.warn('[TASK_START] No main window found');
         return;
       }
 
+      // Validate taskId
+      let validTaskId: string;
+      try {
+        validTaskId = validateTaskId(taskId);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Invalid task ID';
+        console.error('[TASK_START] Validation error:', errorMsg);
+        mainWindow.webContents.send(IPC_CHANNELS.TASK_ERROR, taskId, errorMsg);
+        return;
+      }
+
+      console.warn('[TASK_START] Received request for taskId:', validTaskId);
+
       // Find task and project
-      const { task, project } = findTaskAndProject(taskId);
+      const { task, project } = findTaskAndProject(validTaskId);
 
       if (!task || !project) {
-        console.warn('[TASK_START] Task or project not found for taskId:', taskId);
+        console.warn('[TASK_START] Task or project not found for taskId:', validTaskId);
         mainWindow.webContents.send(
           IPC_CHANNELS.TASK_ERROR,
-          taskId,
+          validTaskId,
           'Task or project not found'
         );
         return;
+      }
+
+      // Check approval status - block execution if approval is pending or rejected
+      if (task.metadata?.approval) {
+        const approvalStatus = task.metadata.approval.status;
+
+        if (approvalStatus === 'pending_approval') {
+          console.warn('[TASK_START] Task blocked - pending approval:', taskId);
+          mainWindow.webContents.send(
+            IPC_CHANNELS.TASK_ERROR,
+            taskId,
+            `Task requires approval before execution. Current stage: ${task.metadata.approval.stage}`
+          );
+          return;
+        }
+
+        if (approvalStatus === 'rejected') {
+          console.warn('[TASK_START] Task blocked - approval rejected:', taskId);
+          mainWindow.webContents.send(
+            IPC_CHANNELS.TASK_ERROR,
+            taskId,
+            'Task execution blocked - approval was rejected. Please address feedback before proceeding.'
+          );
+          return;
+        }
+
+        if (approvalStatus === 'changes_requested') {
+          console.warn('[TASK_START] Task blocked - changes requested:', taskId);
+          mainWindow.webContents.send(
+            IPC_CHANNELS.TASK_ERROR,
+            taskId,
+            'Task execution blocked - changes requested. Please address feedback before proceeding.'
+          );
+          return;
+        }
+
+        // If approved, allow execution to proceed
+        console.log('[TASK_START] Approval status: approved, proceeding with execution');
       }
 
       // Check git status - Auto Claude requires git for worktree-based builds
@@ -161,17 +219,23 @@ export function registerTaskExecutionHandlers(
   /**
    * Stop a task
    */
-  ipcMain.on(IPC_CHANNELS.TASK_STOP, (_, taskId: string) => {
-    agentManager.killTask(taskId);
-    fileWatcher.unwatch(taskId);
+  ipcMain.on(IPC_CHANNELS.TASK_STOP, (_, taskId: unknown) => {
+    try {
+      const validTaskId = validateTaskId(taskId);
+      agentManager.killTask(validTaskId);
+      fileWatcher.unwatch(validTaskId);
 
-    const mainWindow = getMainWindow();
-    if (mainWindow) {
-      mainWindow.webContents.send(
-        IPC_CHANNELS.TASK_STATUS_CHANGE,
-        taskId,
-        'backlog'
-      );
+      const mainWindow = getMainWindow();
+      if (mainWindow) {
+        mainWindow.webContents.send(
+          IPC_CHANNELS.TASK_STATUS_CHANGE,
+          validTaskId,
+          'backlog'
+        );
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Invalid task ID';
+      console.error('[TASK_STOP] Validation error:', errorMsg);
     }
   });
 
@@ -180,14 +244,18 @@ export function registerTaskExecutionHandlers(
    */
   ipcMain.handle(
     IPC_CHANNELS.TASK_REVIEW,
-    async (
+    withValidation(async (
       _,
-      taskId: string,
-      approved: boolean,
-      feedback?: string
+      taskId: unknown,
+      approved: unknown,
+      feedback?: unknown
     ): Promise<IPCResult> => {
+      const validTaskId = validateTaskId(taskId);
+      const validApproved = validateBoolean(approved, 'approved');
+      const validFeedback = validateOptionalString(feedback, 'feedback');
+
       // Find task and project
-      const { task, project } = findTaskAndProject(taskId);
+      const { task, project } = findTaskAndProject(validTaskId);
 
       if (!task || !project) {
         return { success: false, error: 'Task not found' };
@@ -206,7 +274,7 @@ export function registerTaskExecutionHandlers(
       const worktreeSpecDir = path.join(worktreePath, specsBaseDir, task.specId);
       const hasWorktree = existsSync(worktreePath);
 
-      if (approved) {
+      if (validApproved) {
         // Write approval to QA report
         const qaReportPath = path.join(specDir, AUTO_BUILD_PATHS.QA_REPORT);
         writeFileSync(
@@ -218,7 +286,7 @@ export function registerTaskExecutionHandlers(
         if (mainWindow) {
           mainWindow.webContents.send(
             IPC_CHANNELS.TASK_STATUS_CHANGE,
-            taskId,
+            validTaskId,
             'done'
           );
         }
@@ -270,27 +338,27 @@ export function registerTaskExecutionHandlers(
 
         writeFileSync(
           fixRequestPath,
-          `# QA Fix Request\n\nStatus: REJECTED\n\n## Feedback\n\n${feedback || 'No feedback provided'}\n\nCreated at: ${new Date().toISOString()}\n`
+          `# QA Fix Request\n\nStatus: REJECTED\n\n## Feedback\n\n${validFeedback || 'No feedback provided'}\n\nCreated at: ${new Date().toISOString()}\n`
         );
 
         // Restart QA process - use worktree path if it exists, otherwise main project
         // The QA process needs to run where the implementation_plan.json with completed subtasks is
         const qaProjectPath = hasWorktree ? worktreePath : project.path;
         console.warn('[TASK_REVIEW] Starting QA process with projectPath:', qaProjectPath);
-        agentManager.startQAProcess(taskId, qaProjectPath, task.specId);
+        agentManager.startQAProcess(validTaskId, qaProjectPath, task.specId);
 
         const mainWindow = getMainWindow();
         if (mainWindow) {
           mainWindow.webContents.send(
             IPC_CHANNELS.TASK_STATUS_CHANGE,
-            taskId,
+            validTaskId,
             'in_progress'
           );
         }
       }
 
       return { success: true };
-    }
+    })
   );
 
   /**
@@ -298,13 +366,20 @@ export function registerTaskExecutionHandlers(
    */
   ipcMain.handle(
     IPC_CHANNELS.TASK_UPDATE_STATUS,
-    async (
+    withValidation(async (
       _,
-      taskId: string,
-      status: TaskStatus
+      taskId: unknown,
+      status: unknown
     ): Promise<IPCResult> => {
+      const validTaskId = validateTaskId(taskId);
+      const validStatus = validateEnum(
+        status,
+        ['backlog', 'in_progress', 'ai_review', 'human_review', 'done'] as const,
+        'status'
+      );
+
       // Find task and project first (needed for worktree check)
-      const { task, project } = findTaskAndProject(taskId);
+      const { task, project } = findTaskAndProject(validTaskId);
 
       if (!task || !project) {
         return { success: false, error: 'Task not found' };
@@ -312,9 +387,9 @@ export function registerTaskExecutionHandlers(
 
       // Validate status transition - 'done' can only be set through merge handler
       // UNLESS there's no worktree (limbo state - already merged/discarded or failed)
-      if (status === 'done') {
+      if (validStatus === 'done') {
         // Check if worktree exists
-        const worktreePath = path.join(project.path, '.worktrees', taskId);
+        const worktreePath = path.join(project.path, '.worktrees', validTaskId);
         const hasWorktree = existsSync(worktreePath);
 
         if (hasWorktree) {
@@ -416,6 +491,23 @@ export function registerTaskExecutionHandlers(
         if (status === 'in_progress' && !agentManager.isRunning(taskId)) {
           const mainWindow = getMainWindow();
 
+          // Check approval status before auto-starting
+          if (task.metadata?.approval) {
+            const approvalStatus = task.metadata.approval.status;
+
+            if (approvalStatus === 'pending_approval' || approvalStatus === 'rejected' || approvalStatus === 'changes_requested') {
+              console.warn('[TASK_UPDATE_STATUS] Cannot auto-start task - approval required or blocked');
+              if (mainWindow) {
+                mainWindow.webContents.send(
+                  IPC_CHANNELS.TASK_ERROR,
+                  taskId,
+                  `Task requires approval before execution. Current status: ${approvalStatus}`
+                );
+              }
+              return { success: false, error: 'Task requires approval before execution' };
+            }
+          }
+
           // Check git status before auto-starting
           const gitStatusCheck = checkGitStatus(project.path);
           if (!gitStatusCheck.isGitRepo || !gitStatusCheck.hasCommits) {
@@ -507,7 +599,7 @@ export function registerTaskExecutionHandlers(
           error: error instanceof Error ? error.message : 'Failed to update task status'
         };
       }
-    }
+    })
   );
 
   /**
@@ -767,6 +859,48 @@ export function registerTaskExecutionHandlers(
           error: error instanceof Error ? error.message : 'Failed to recover task'
         };
       }
+    }
+  );
+
+  /**
+   * Get scheduled restart info for a task
+   */
+  ipcMain.handle(
+    'task:get-scheduled-restart',
+    async (_, taskId: string): Promise<IPCResult<{ scheduled: boolean; fireAt?: string }>> => {
+      const fireAt = agentManager.getScheduledRestartTime(taskId);
+      return {
+        success: true,
+        data: {
+          scheduled: !!fireAt,
+          fireAt: fireAt?.toISOString()
+        }
+      };
+    }
+  );
+
+  /**
+   * Cancel scheduled restart for a task
+   */
+  ipcMain.handle(
+    'task:cancel-scheduled-restart',
+    async (_, taskId: string): Promise<IPCResult> => {
+      agentManager.cancelScheduledRestart(taskId);
+      return { success: true };
+    }
+  );
+
+  /**
+   * Run scheduled task immediately
+   */
+  ipcMain.handle(
+    'task:run-scheduled-now',
+    async (_, taskId: string): Promise<IPCResult> => {
+      const started = agentManager.runScheduledTaskNow(taskId);
+      if (started) {
+        return { success: true };
+      }
+      return { success: false, error: 'No scheduled restart found for this task' };
     }
   );
 }

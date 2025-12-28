@@ -1,9 +1,9 @@
-import { spawn } from 'child_process';
 import * as path from 'path';
 import * as os from 'os';
 import type { GitCommit } from '../../shared/types';
 import { getProfileEnv } from '../rate-limit-detector';
 import { parsePythonCommand } from '../python-detector';
+import { getProcessManager } from '../utils/process-manager';
 
 interface VersionSuggestion {
   version: string;
@@ -13,10 +13,12 @@ interface VersionSuggestion {
 
 /**
  * AI-powered version bump suggester using Claude SDK with haiku model
- * Analyzes commits to intelligently suggest semantic version bumps
+ * Analyzes commits to intelligently suggest semantic version bumps with timeout protection
  */
 export class VersionSuggester {
+  private processManager = getProcessManager();
   private debugEnabled: boolean;
+  private readonly VERSION_SUGGEST_TIMEOUT = 60 * 1000; // 1 minute
 
   constructor(
     private pythonPath: string,
@@ -34,7 +36,7 @@ export class VersionSuggester {
   }
 
   /**
-   * Suggest version bump using AI analysis of commits
+   * Suggest version bump using AI analysis of commits with timeout protection
    */
   async suggestVersionBump(
     commits: GitCommit[],
@@ -52,48 +54,32 @@ export class VersionSuggester {
     // Build environment
     const spawnEnv = this.buildSpawnEnvironment();
 
-    return new Promise((resolve, _reject) => {
-      // Parse Python command to handle space-separated commands like "py -3"
-      const [pythonCommand, pythonBaseArgs] = parsePythonCommand(this.pythonPath);
-      const childProcess = spawn(pythonCommand, [...pythonBaseArgs, '-c', script], {
-        cwd: this.autoBuildSourcePath,
-        env: spawnEnv
+    // Parse Python command to handle space-separated commands like "py -3"
+    const [pythonCommand, pythonBaseArgs] = parsePythonCommand(this.pythonPath);
+
+    try {
+      // Execute with ProcessManager (with timeout)
+      const result = await this.processManager.execute({
+        id: `version-suggest-${Date.now()}`,
+        command: pythonCommand,
+        args: [...pythonBaseArgs, '-c', script],
+        spawnOptions: {
+          cwd: this.autoBuildSourcePath,
+          env: spawnEnv
+        },
+        timeout: this.VERSION_SUGGEST_TIMEOUT,
+        description: 'Version bump suggestion analysis'
       });
 
-      let output = '';
-      let errorOutput = '';
-
-      childProcess.stdout?.on('data', (data: Buffer) => {
-        output += data.toString();
-      });
-
-      childProcess.stderr?.on('data', (data: Buffer) => {
-        errorOutput += data.toString();
-      });
-
-      childProcess.on('exit', (code: number | null) => {
-        if (code === 0 && output.trim()) {
-          try {
-            const result = this.parseAIResponse(output.trim(), currentVersion);
-            this.debug('AI suggestion parsed', result);
-            resolve(result);
-          } catch (error) {
-            this.debug('Failed to parse AI response', error);
-            // Fallback to simple bump
-            resolve(this.fallbackSuggestion(currentVersion));
-          }
-        } else {
-          this.debug('AI analysis failed', { code, error: errorOutput });
-          // Fallback to simple bump
-          resolve(this.fallbackSuggestion(currentVersion));
-        }
-      });
-
-      childProcess.on('error', (err: Error) => {
-        this.debug('Process error', err);
-        resolve(this.fallbackSuggestion(currentVersion));
-      });
-    });
+      // Parse AI response
+      const suggestion = this.parseAIResponse(result.stdout.trim(), currentVersion);
+      this.debug('AI suggestion parsed', suggestion);
+      return suggestion;
+    } catch (error) {
+      this.debug('AI analysis failed, using fallback', error);
+      // Fallback to simple bump on any error
+      return this.fallbackSuggestion(currentVersion);
+    }
   }
 
   /**

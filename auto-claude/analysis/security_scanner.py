@@ -22,10 +22,13 @@ Usage:
 """
 
 import json
+import logging
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Import the existing secrets scanner
 try:
@@ -205,8 +208,14 @@ class SecurityScanner:
                     )
                 )
 
-        except Exception as e:
-            result.scan_errors.append(f"Secrets scan error: {str(e)}")
+        except (OSError, PermissionError) as e:
+            error_msg = f"File access error during secrets scan: {e}"
+            logger.error(error_msg)
+            result.scan_errors.append(error_msg)
+        except (ValueError, TypeError) as e:
+            error_msg = f"Data processing error in secrets scan: {e}"
+            logger.error(error_msg)
+            result.scan_errors.append(error_msg)
 
     def _run_sast_scans(self, project_dir: Path, result: SecurityScanResult) -> None:
         """Run SAST tools based on project type."""
@@ -285,11 +294,20 @@ class SecurityScanner:
                     result.scan_errors.append("Failed to parse Bandit output")
 
         except subprocess.TimeoutExpired:
-            result.scan_errors.append("Bandit scan timed out")
+            error_msg = "Bandit scan timed out after 120 seconds"
+            logger.warning(error_msg)
+            result.scan_errors.append(error_msg)
         except FileNotFoundError:
+            logger.debug("Bandit not found - skipping Python SAST")
             result.scan_errors.append("Bandit not found")
-        except Exception as e:
-            result.scan_errors.append(f"Bandit error: {str(e)}")
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Bandit execution failed: {e.stderr if e.stderr else e}"
+            logger.error(error_msg)
+            result.scan_errors.append(error_msg)
+        except json.JSONDecodeError as e:
+            error_msg = f"Failed to parse Bandit JSON output: {e}"
+            logger.error(error_msg)
+            result.scan_errors.append(error_msg)
 
     def _run_dependency_audits(
         self, project_dir: Path, result: SecurityScanResult
@@ -351,11 +369,16 @@ class SecurityScanner:
                     pass  # npm audit may return invalid JSON on no findings
 
         except subprocess.TimeoutExpired:
-            result.scan_errors.append("npm audit timed out")
+            error_msg = "npm audit timed out after 120 seconds"
+            logger.warning(error_msg)
+            result.scan_errors.append(error_msg)
         except FileNotFoundError:
-            pass  # npm not available
-        except Exception as e:
-            result.scan_errors.append(f"npm audit error: {str(e)}")
+            logger.debug("npm not found - skipping JavaScript dependency audit")
+        except subprocess.CalledProcessError as e:
+            # npm audit returns non-zero for vulnerabilities, which is expected
+            logger.debug(f"npm audit returned non-zero status (may indicate vulnerabilities): {e}")
+        except json.JSONDecodeError:
+            logger.warning("npm audit returned invalid JSON - may indicate no findings")
 
     def _run_pip_audit(self, project_dir: Path, result: SecurityScanResult) -> None:
         """Run pip-audit for Python projects (if available)."""
@@ -391,11 +414,14 @@ class SecurityScanner:
                     pass
 
         except FileNotFoundError:
-            pass  # pip-audit not available
+            logger.debug("pip-audit not found - skipping Python dependency audit")
         except subprocess.TimeoutExpired:
-            pass
-        except Exception:
-            pass
+            logger.warning("pip-audit timed out after 120 seconds")
+        except subprocess.CalledProcessError:
+            # pip-audit returns non-zero for vulnerabilities, which is expected
+            logger.debug("pip-audit returned non-zero status (may indicate vulnerabilities)")
+        except json.JSONDecodeError:
+            logger.warning("pip-audit returned invalid JSON")
 
     def _is_python_project(self, project_dir: Path) -> bool:
         """Check if this is a Python project."""

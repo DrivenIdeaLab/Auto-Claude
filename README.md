@@ -27,7 +27,14 @@ Your AI coding companion. Build features, fix bugs, and ship faster — with aut
 - **Cross-Platform**: Desktop app runs on Mac, Windows, and Linux
 - **Any Project Type**: Build web apps, APIs, CLIs — works with any software project
 
+
 ## Quick Start
+
+## 🚀 Quick Start
+
+> **📖 For complete setup instructions**, see **[docs/SETUP.md](docs/SETUP.md)** - the comprehensive setup guide with prerequisites, installation steps, environment configuration, verification, and troubleshooting.
+
+### Desktop UI (Recommended)
 
 ### Download Auto Claude
 
@@ -42,9 +49,19 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 > **Not sure which Mac?** Click the Apple menu () > "About This Mac". Look for "Chip" - M1/M2/M3/M4 = Apple Silicon, otherwise Intel.
 
-### Prerequisites
+**Prerequisites:**
+
 
 Before using Auto Claude, you need:
+
+1. **Node.js 18+** - [Download Node.js](https://nodejs.org/)
+2. **Python 3.10+** - [Download Python](https://www.python.org/downloads/)
+   - Python 3.10-3.11: Core features work (spec creation, implementation, QA)
+   - Python 3.12+: Full features including Graphiti Memory Layer (recommended)
+3. **Docker Desktop** - Required for the Memory Layer
+4. **Claude Code CLI** - `npm install -g @anthropic-ai/claude-code`
+5. **Claude Subscription** - Requires [Claude Pro or Max](https://claude.ai/upgrade) for Claude Code access
+6. **Git Repository** - Your project must be initialized as a git repository
 
 1. **Claude Subscription** - Requires [Claude Pro or Max](https://claude.ai/upgrade) for Claude Code access
 2. **Claude Code CLI** - Install with: `npm install -g @anthropic-ai/claude-code`

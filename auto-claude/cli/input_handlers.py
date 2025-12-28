@@ -165,7 +165,10 @@ def read_from_file() -> str | None:
     except PermissionError:
         print_status(f"Permission denied: cannot read {file_path_input}", "error")
         return None
-    except Exception as e:
+    except UnicodeDecodeError as e:
+        print_status(f"File encoding error: {e}", "error")
+        return None
+    except (OSError, IOError) as e:
         print_status(f"Error reading file: {e}", "error")
         return None
 

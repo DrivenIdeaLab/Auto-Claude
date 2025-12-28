@@ -166,6 +166,14 @@ export function useIpcListeners(): void {
       }
     );
 
+    // Cost limit listener
+    const showCostLimitModal = useRateLimitStore.getState().showCostLimitModal;
+    const cleanupCostLimit = window.electronAPI.onCostLimit(
+      (info: { message: string; profileId?: string }) => {
+        showCostLimitModal(info);
+      }
+    );
+
     // Cleanup on unmount
     return () => {
       cleanupProgress();
@@ -179,6 +187,7 @@ export function useIpcListeners(): void {
       cleanupRoadmapStopped();
       cleanupRateLimit();
       cleanupSDKRateLimit();
+      cleanupCostLimit();
     };
   }, [updateTaskFromPlan, updateTaskStatus, updateExecutionProgress, appendLog, setError]);
 }

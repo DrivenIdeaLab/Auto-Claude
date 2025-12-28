@@ -6,8 +6,11 @@ CLI commands for building specs and handling the main build flow.
 """
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Ensure parent directory is in path for imports (before other imports)
 _PARENT_DIR = Path(__file__).parent.parent
@@ -306,11 +309,22 @@ def handle_build_command(
             max_iterations=max_iterations,
             verbose=verbose,
         )
-    except Exception as e:
+    except (OSError, PermissionError) as e:
+        logger.error(f"File system error during build: {e}")
+        print(f"\nFatal error: File system error: {e}")
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("Build interrupted by user")
+        print("\nBuild interrupted by user")
+        sys.exit(130)
+    except (ValueError, KeyError) as e:
+        logger.error(f"Configuration or data error: {e}")
         print(f"\nFatal error: {e}")
         if verbose:
             import traceback
-
             traceback.print_exc()
         sys.exit(1)
 
