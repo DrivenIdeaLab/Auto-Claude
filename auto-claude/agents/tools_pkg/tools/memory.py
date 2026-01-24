@@ -10,6 +10,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import aiofiles
+import aiofiles.os
 
 try:
     from claude_agent_sdk import tool
@@ -147,7 +149,17 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
         """Get accumulated session context."""
         memory_dir = spec_dir / "memory"
 
-        if not memory_dir.exists():
+        try:
+            if not await aiofiles.os.path.isdir(memory_dir):
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "No session memory found. This appears to be the first session.",
+                        }
+                    ]
+                }
+        except Exception:
             return {
                 "content": [
                     {
@@ -161,10 +173,11 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
 
         # Load codebase map
         codebase_map_file = memory_dir / "codebase_map.json"
-        if codebase_map_file.exists():
-            try:
-                with open(codebase_map_file) as f:
-                    codebase_map = json.load(f)
+        try:
+            if await aiofiles.os.path.isfile(codebase_map_file):
+                async with aiofiles.open(codebase_map_file, "r") as f:
+                    content = await f.read()
+                    codebase_map = json.loads(content)
 
                 discoveries = codebase_map.get("discovered_files", {})
                 if discoveries:
@@ -172,35 +185,37 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
                     for path, info in list(discoveries.items())[:20]:  # Limit to 20
                         desc = info.get("description", "No description")
                         result_parts.append(f"- `{path}`: {desc}")
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         # Load gotchas
         gotchas_file = memory_dir / "gotchas.md"
-        if gotchas_file.exists():
-            try:
-                content = gotchas_file.read_text()
+        try:
+            if await aiofiles.os.path.isfile(gotchas_file):
+                async with aiofiles.open(gotchas_file, "r") as f:
+                    content = await f.read()
                 if content.strip():
                     result_parts.append("\n## Gotchas")
                     # Take last 1000 chars to avoid too much context
                     result_parts.append(
                         content[-1000:] if len(content) > 1000 else content
                     )
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         # Load patterns
         patterns_file = memory_dir / "patterns.md"
-        if patterns_file.exists():
-            try:
-                content = patterns_file.read_text()
+        try:
+            if await aiofiles.os.path.isfile(patterns_file):
+                async with aiofiles.open(patterns_file, "r") as f:
+                    content = await f.read()
                 if content.strip():
                     result_parts.append("\n## Patterns")
                     result_parts.append(
                         content[-1000:] if len(content) > 1000 else content
                     )
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         if not result_parts:
             return {
