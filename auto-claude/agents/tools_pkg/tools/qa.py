@@ -5,6 +5,7 @@ QA Management Tools
 Tools for managing QA status and sign-off in implementation_plan.json.
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,8 +90,11 @@ def create_qa_tools(spec_dir: Path, project_dir: Path) -> list:
             except json.JSONDecodeError:
                 tests_passed = {}
 
-            with open(plan_file) as f:
-                plan = json.load(f)
+            def read_plan():
+                with open(plan_file) as f:
+                    return json.load(f)
+
+            plan = await asyncio.to_thread(read_plan)
 
             # Get current QA session number
             current_qa = plan.get("qa_signoff", {})
@@ -118,8 +122,11 @@ def create_qa_tools(spec_dir: Path, project_dir: Path) -> list:
 
             plan["last_updated"] = datetime.now(timezone.utc).isoformat()
 
-            with open(plan_file, "w") as f:
-                json.dump(plan, f, indent=2)
+            def write_plan():
+                with open(plan_file, "w") as f:
+                    json.dump(plan, f, indent=2)
+
+            await asyncio.to_thread(write_plan)
 
             return {
                 "content": [
