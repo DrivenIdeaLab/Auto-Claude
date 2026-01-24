@@ -182,10 +182,18 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
         {/* Header - improved visual hierarchy */}
         <div className="flex items-start justify-between gap-3">
           <h3
-            className="font-semibold text-sm text-foreground line-clamp-2 leading-snug flex-1 min-w-0"
+            className="font-semibold text-sm text-foreground flex-1 min-w-0"
             title={task.title}
           >
-            {task.title}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onClick();
+              }}
+              className="text-left w-full hover:underline focus:outline-none focus:underline decoration-primary line-clamp-2 leading-snug"
+            >
+              {task.title}
+            </button>
           </h3>
           <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end max-w-[160px]">
             {/* Stuck indicator - highest priority */}
