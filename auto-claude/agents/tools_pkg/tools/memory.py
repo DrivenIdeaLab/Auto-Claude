@@ -6,12 +6,11 @@ Tools for recording and retrieving session memory, including discoveries,
 gotchas, and patterns.
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-import aiofiles
-import aiofiles.os
 
 try:
     from claude_agent_sdk import tool
@@ -53,15 +52,15 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
         category = args.get("category", "general")
 
         memory_dir = spec_dir / "memory"
-        memory_dir.mkdir(exist_ok=True)
+        await asyncio.to_thread(memory_dir.mkdir, exist_ok=True)
 
         codebase_map_file = memory_dir / "codebase_map.json"
 
         try:
             # Load existing map or create new
-            if codebase_map_file.exists():
-                with open(codebase_map_file) as f:
-                    codebase_map = json.load(f)
+            if await asyncio.to_thread(codebase_map_file.exists):
+                content = await asyncio.to_thread(codebase_map_file.read_text)
+                codebase_map = json.loads(content)
             else:
                 codebase_map = {
                     "discovered_files": {},
@@ -76,8 +75,8 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
             }
             codebase_map["last_updated"] = datetime.now(timezone.utc).isoformat()
 
-            with open(codebase_map_file, "w") as f:
-                json.dump(codebase_map, f, indent=2)
+            content = json.dumps(codebase_map, indent=2)
+            await asyncio.to_thread(codebase_map_file.write_text, content)
 
             return {
                 "content": [
@@ -109,7 +108,7 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
         context = args.get("context", "")
 
         memory_dir = spec_dir / "memory"
-        memory_dir.mkdir(exist_ok=True)
+        await asyncio.to_thread(memory_dir.mkdir, exist_ok=True)
 
         gotchas_file = memory_dir / "gotchas.md"
 
@@ -121,18 +120,23 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
                 entry += f"\n\n_Context: {context}_"
             entry += "\n"
 
-            with open(gotchas_file, "a") as f:
-                if not gotchas_file.exists() or gotchas_file.stat().st_size == 0:
-                    f.write(
-                        "# Gotchas & Pitfalls\n\nThings to watch out for in this codebase.\n"
-                    )
-                f.write(entry)
+            def append_to_gotchas():
+                with open(gotchas_file, "a") as f:
+                    if not gotchas_file.exists() or gotchas_file.stat().st_size == 0:
+                        f.write(
+                            "# Gotchas & Pitfalls\n\nThings to watch out for in this codebase.\n"
+                        )
+                    f.write(entry)
+
+            await asyncio.to_thread(append_to_gotchas)
 
             return {"content": [{"type": "text", "text": f"Recorded gotcha: {gotcha}"}]}
 
         except Exception as e:
             return {
-                "content": [{"type": "text", "text": f"Error recording gotcha: {e}"}]
+                "content": [
+                    {"type": "text", "text": f"Error recording gotcha: {e}"}
+                ]
             }
 
     tools.append(record_gotcha)
@@ -150,7 +154,7 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
         memory_dir = spec_dir / "memory"
 
         try:
-            if not await aiofiles.os.path.isdir(memory_dir):
+            if not await asyncio.to_thread(memory_dir.is_dir):
                 return {
                     "content": [
                         {
@@ -174,10 +178,9 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
         # Load codebase map
         codebase_map_file = memory_dir / "codebase_map.json"
         try:
-            if await aiofiles.os.path.isfile(codebase_map_file):
-                async with aiofiles.open(codebase_map_file, "r") as f:
-                    content = await f.read()
-                    codebase_map = json.loads(content)
+            if await asyncio.to_thread(codebase_map_file.is_file):
+                content = await asyncio.to_thread(codebase_map_file.read_text)
+                codebase_map = json.loads(content)
 
                 discoveries = codebase_map.get("discovered_files", {})
                 if discoveries:
@@ -191,9 +194,8 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
         # Load gotchas
         gotchas_file = memory_dir / "gotchas.md"
         try:
-            if await aiofiles.os.path.isfile(gotchas_file):
-                async with aiofiles.open(gotchas_file, "r") as f:
-                    content = await f.read()
+            if await asyncio.to_thread(gotchas_file.is_file):
+                content = await asyncio.to_thread(gotchas_file.read_text)
                 if content.strip():
                     result_parts.append("\n## Gotchas")
                     # Take last 1000 chars to avoid too much context
@@ -206,9 +208,8 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
         # Load patterns
         patterns_file = memory_dir / "patterns.md"
         try:
-            if await aiofiles.os.path.isfile(patterns_file):
-                async with aiofiles.open(patterns_file, "r") as f:
-                    content = await f.read()
+            if await asyncio.to_thread(patterns_file.is_file):
+                content = await asyncio.to_thread(patterns_file.read_text)
                 if content.strip():
                     result_parts.append("\n## Patterns")
                     result_parts.append(
@@ -241,7 +242,7 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
         memory_dir = spec_dir / "memory"
         merge_history_file = memory_dir / "merge_history.json"
 
-        if not merge_history_file.exists():
+        if not await asyncio.to_thread(merge_history_file.exists):
             return {
                 "content": [
                     {
@@ -252,8 +253,8 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
             }
 
         try:
-            with open(merge_history_file) as f:
-                merge_history = json.load(f)
+            content = await asyncio.to_thread(merge_history_file.read_text)
+            merge_history = json.loads(content)
 
             merges = merge_history.get("merges", [])
             if not merges:
