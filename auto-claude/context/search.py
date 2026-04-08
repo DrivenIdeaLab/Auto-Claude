@@ -5,6 +5,7 @@ Code Search Functionality
 Search codebase for relevant files based on keywords.
 """
 
+import os
 from pathlib import Path
 
 from .constants import CODE_EXTENSIONS, SKIP_DIRS
@@ -93,9 +94,11 @@ class CodeSearcher:
         Yields:
             Path objects for code files
         """
-        for item in directory.rglob("*"):
-            if item.is_file() and item.suffix in CODE_EXTENSIONS:
-                # Check if in skip directory
-                parts = item.relative_to(directory).parts
-                if not any(part in SKIP_DIRS for part in parts):
-                    yield item
+        for root, dirs, files in os.walk(directory):
+            # Prune directories in-place
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+
+            for file in files:
+                file_path = Path(root) / file
+                if file_path.suffix in CODE_EXTENSIONS:
+                    yield file_path
